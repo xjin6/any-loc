@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>AnyLoc · 定位模拟</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+  /* ===== Theme variables ===== */
+  :root, [data-theme="light"] {
+    --bg:#ffffff; --panel:#ffffff; --inset:#f1f3f4; --inset2:#f8f9fa;
+    --border:#e3e5e8; --border2:#dadce0;
+    --text:#202124; --text2:#3c4043; --muted:#5f6368; --faint:#80868b;
+    --blue:#1a73e8; --blue2:#1a73e8; --blueSoft:#e8f0fe; --blueText:#1967d2;
+    --green:#1e8e3e; --greenSoft:#e6f4ea; --greenText:#188038;
+    --red:#d93025; --redSoft:#fce8e6; --redText:#c5221f;
+    --amber:#e37400; --amberSoft:#fef7e0; --amberText:#b06000;
+    --shadow:0 1px 3px rgba(60,64,67,.15),0 4px 12px rgba(60,64,67,.12);
+    --shadowSm:0 1px 2px rgba(60,64,67,.2);
+    --mapbg:#e8eaed; --onblue:#ffffff; --panel-glass:rgba(255,255,255,.62);
+  }
+  [data-theme="dark"] {
+    --bg:#202124; --panel:#282a2d; --inset:#35363a; --inset2:#2d2e31;
+    --border:#3c4043; --border2:#494c50;
+    --text:#e8eaed; --text2:#c9ccd1; --muted:#9aa0a6; --faint:#80868b;
+    --blue:#8ab4f8; --blue2:#8ab4f8; --blueSoft:#283142; --blueText:#8ab4f8;
+    --green:#81c995; --greenSoft:#28352b; --greenText:#81c995;
+    --red:#f28b82; --redSoft:#3a2a2a; --redText:#f28b82;
+    --amber:#fdd663; --amberSoft:#3a3320; --amberText:#fdd663;
+    --shadow:0 1px 3px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.4);
+    --shadowSm:0 1px 3px rgba(0,0,0,.5);
+    --mapbg:#0b0f14; --onblue:#202124; --panel-glass:rgba(40,42,45,.62);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Google Sans","Segoe UI","Microsoft YaHei",system-ui,Arial,sans-serif;
+    background:var(--bg);color:var(--text);overflow:hidden}
+  #app{display:flex;height:100%}
+  #map{flex:1;height:100%;background:var(--mapbg)}
+  .leaflet-container{background:var(--mapbg)}
+
+  /* ---------- side panel (LEFT) ---------- */
+  #panel{width:360px;min-width:360px;background:var(--panel);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;gap:18px;padding:20px 20px;overflow-y:auto}
+  #panel::-webkit-scrollbar{width:8px}
+  #panel::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+
+  /* header */
+  .head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .head .title{min-width:0}
+  h1{font-size:20px;margin:0;display:flex;align-items:center;gap:8px;font-weight:600;letter-spacing:-.2px}
+  h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none;transition:.3s}
+  h1 .brand span{color:var(--blue)}
+  /* reserve space for up to 2 lines so switching language doesn't shift the
+     rest of the panel up/down (zh=1 line, en/ja=2 lines) */
+  .sub{color:var(--muted);font-size:12.5px;margin-top:3px;line-height:1.4;
+    min-height:3em;display:flex;align-items:flex-start}
+  .head-actions{display:flex;gap:8px;flex:none;align-items:center}
+  .icon-btn{display:flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;
+    border-radius:50%;background:var(--panel);border:1px solid var(--border2);color:var(--muted);
+    cursor:pointer;box-shadow:var(--shadowSm);transition:.12s}
+  .icon-btn:hover{background:var(--inset2);color:var(--text2)}
+
+  /* language dropdown */
+  .lang{position:relative;flex:none}
+  .lang-btn{display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:13px;font-weight:500;
+    background:var(--panel);border:1px solid var(--border2);color:var(--text2);border-radius:20px;cursor:pointer;
+    transition:.12s;box-shadow:var(--shadowSm)}
+  .lang-btn:hover{background:var(--inset2);box-shadow:var(--shadow)}
+  .lang-btn .chev{color:var(--muted);transition:transform .15s}
+  .lang.open .lang-btn .chev{transform:rotate(180deg)}
+  .lang-menu{position:absolute;right:0;top:calc(100% + 8px);min-width:150px;z-index:1500;
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:6px;
+    box-shadow:var(--shadow);display:none}
+  .lang.open .lang-menu{display:block}
+  .lang-menu button{display:flex;align-items:center;justify-content:space-between;width:100%;
+    padding:9px 12px;font-size:13.5px;background:none;border:none;color:var(--text);border-radius:8px;
+    cursor:pointer;text-align:left;box-shadow:none}
+  /* hover and selected look the same (blue) — the checkmark is the only difference */
+  .lang-menu button:hover,.lang-menu button.on{background:var(--blueSoft);color:var(--blueText);font-weight:600}
+  .lang-menu button .tick{opacity:0;color:var(--blueText)}
+  .lang-menu button.on .tick{opacity:1}
+
+  /* cards — borderless, separated by whitespace + a faint divider (Google style) */
+  .card{background:transparent;border:none;border-radius:0;padding:0 2px}
+  .card + .card{border-top:1px solid var(--border);padding-top:18px;margin-top:2px}
+  .card h2{font-size:12px;text-transform:none;letter-spacing:0;color:var(--text);font-weight:600;
+    margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+  .row{display:flex;gap:10px}
+  .row>*{flex:1}
+  label{font-size:11.5px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500}
+
+  input,button,select{font:inherit}
+  input[type=text],select{width:100%;background:var(--inset2);border:1px solid var(--border);color:var(--text);
+    border-radius:10px;padding:11px 12px;font-size:13.5px;outline:none;transition:.12s}
+  input[type=text]::placeholder{color:var(--faint)}
+  input[type=text]:focus,select:focus{border-color:var(--blue);background:var(--panel);
+    box-shadow:0 0 0 3px var(--blueSoft)}
+  button{cursor:pointer;border:1px solid var(--border2);background:var(--panel);color:var(--text2);
+    border-radius:10px;padding:10px 12px;font-size:13.5px;font-weight:500;box-shadow:var(--shadowSm);transition:.12s}
+  button:hover{background:var(--inset2);border-color:var(--border2)}
+  button:active{transform:translateY(.5px)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  /* primary/blue: flat, bordered, no gradient/gloss — just a tinted fill */
+  button.primary,button.blue{background:var(--blueSoft);border:1px solid var(--blue);
+    color:var(--blueText);font-weight:600;box-shadow:var(--shadowSm)}
+  button.primary:hover,button.blue:hover{background:var(--blueSoft);border-color:var(--blue);filter:brightness(.98)}
+  button.primary:active,button.blue:active{transform:translateY(.5px)}
+  button.danger{background:var(--panel);border:1px solid var(--border2);color:var(--redText);box-shadow:var(--shadowSm)}
+  button.danger:hover{background:var(--redSoft);border-color:var(--red)}
+
+  .status-line{font-size:12.5px;color:var(--muted);line-height:1.5}
+  /* reserve ~2 lines so the Connect buttons don't jump when the device line
+     wraps to 2 lines in en/ja (or shows device info vs a notice) */
+  #deviceInfo{min-height:3em}
+  .status-line b{color:var(--text);font-weight:600}
+  .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+  .pill.idle{background:var(--inset);color:var(--muted)}
+  .pill.connecting{background:var(--amberSoft);color:var(--amberText)}
+  .pill.connected{background:var(--greenSoft);color:var(--greenText)}
+  .pill.error{background:var(--redSoft);color:var(--redText)}
+  .coord{font-family:"Roboto Mono","Cascadia Code",Consolas,monospace;font-size:13px;color:var(--text2)}
+
+  /* developer-mode banner */
+  .dm-banner{margin-top:10px;padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.55;display:none}
+  .dm-banner.show{display:block}
+  .dm-banner.waiting{background:var(--inset);color:var(--muted)}
+  .dm-banner.trust{background:var(--amberSoft);color:var(--amberText);font-weight:600}
+  .dm-banner.revealing{background:var(--blueSoft);color:var(--blueText)}
+  .dm-banner.reveal_done{background:var(--amberSoft);color:var(--amberText);font-weight:500;line-height:1.6}
+  .dm-banner.enabled{background:var(--greenSoft);color:var(--greenText);font-weight:600}
+  .dm-banner.error{background:var(--redSoft);color:var(--redText)}
+
+  /* ---------- search ---------- */
+  .search-wrap{position:relative}
+  .search-ico{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--faint);pointer-events:none;z-index:1}
+  #search{padding-left:42px!important;border-radius:24px!important;background:var(--inset2)!important;
+    border-color:transparent!important;box-shadow:var(--shadowSm)}
+  #search:focus{background:var(--panel)!important;border-color:var(--blue)!important}
+  #searchResults{list-style:none;margin:8px 0 0;padding:6px;position:absolute;left:0;right:0;top:100%;
+    z-index:1200;background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden;
+    max-height:280px;overflow-y:auto;box-shadow:var(--shadow);display:none}
+  #searchResults.show{display:block}
+  #searchResults li{padding:9px 10px;font-size:12px;cursor:pointer;border-radius:8px}
+  #searchResults li:hover,#searchResults li.active{background:var(--blueSoft)}
+  #searchResults li:hover .r-name,#searchResults li.active .r-name{color:var(--blueText)}
+  #searchResults li .r-name{color:var(--text);font-size:13.5px}
+  #searchResults li .r-sub{color:var(--muted);font-size:11.5px;margin-top:1px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #searchResults li .r-ico{color:var(--faint);margin-right:6px}
+  #searchResults li.empty{color:var(--muted);cursor:default}
+  #searchResults li.empty:hover{background:none}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--inset2);border:1px solid var(--border);
+    border-radius:20px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:var(--text2)}
+  .chip:hover{background:var(--inset);border-color:var(--border2)}
+  .chip .x{color:var(--faint);font-size:15px;line-height:1}
+  .chip .x:hover{color:var(--redText)}
+  .chip.add{color:var(--muted);border-style:dashed;background:transparent}
+
+  /* ---------- mode tabs ---------- */
+  .tabs{display:flex;background:transparent;border-bottom:1px solid var(--border);padding:0;gap:0;margin-bottom:2px}
+  .tabs button{flex:1;background:transparent;border:none;border-bottom:2.5px solid transparent;
+    padding:10px 8px 11px;border-radius:0;color:var(--muted);font-weight:600;box-shadow:none;margin-bottom:-1px}
+  .tabs button:hover{background:transparent;color:var(--text2)}
+  .tabs button.on{background:transparent;color:var(--blueText);border-bottom-color:var(--blue)}
+
+  /* ---------- speed (icon tabs) — flat, bordered, unified style ---------- */
+  .speeds{display:flex;gap:8px}
+  .speeds button{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;
+    padding:10px 4px 8px;font-size:11.5px;color:var(--muted);background:var(--panel);
+    border:1px solid var(--border2);border-radius:12px;font-weight:500;box-shadow:var(--shadowSm)}
+  .speeds button svg{color:var(--faint);transition:.12s}
+  .speeds button:hover{background:var(--inset2);color:var(--text2)}
+  .speeds button:hover svg{color:var(--text2)}
+  .speeds button.on{background:var(--blueSoft);border-color:var(--blue);color:var(--blueText);font-weight:600}
+  .speeds button.on svg{color:var(--blue)}
+
+  /* ---------- joystick ---------- */
+  #joyWrap{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:20px}
+  #joy{width:150px;height:150px;border-radius:50%;background:var(--inset2);
+    border:1px solid var(--border);position:relative;touch-action:none;user-select:none}
+  #joyNub{width:56px;height:56px;border-radius:50%;position:absolute;left:47px;top:47px;
+    background:var(--blueSoft);border:1.5px solid var(--blue);box-shadow:var(--shadowSm);cursor:grab}
+  #joyNub:active{cursor:grabbing}
+  .hint{font-size:11.5px;color:var(--muted);text-align:center;line-height:1.7;min-height:5.2em}
+  kbd{background:var(--inset);border:1px solid var(--border2);border-bottom-width:2px;border-radius:5px;
+    padding:1px 6px;font-size:11px;font-family:inherit;color:var(--text2)}
+
+  /* ---------- route ---------- */
+  .wp-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+  .wp-list li{display:flex;align-items:center;gap:9px;background:var(--inset2);border:1px solid var(--border);
+    border-radius:9px;padding:8px 10px;font-size:12px}
+  .wp-badge{width:22px;height:22px;border-radius:50%;background:var(--blue);color:var(--onblue);font-size:11px;
+    font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+  .wp-list li .wp-co{flex:1;color:var(--muted);font-family:monospace;font-size:11.5px}
+  .wp-list li .wp-x{color:var(--faint);cursor:pointer;font-size:16px}
+  .wp-list li .wp-x:hover{color:var(--redText)}
+  .route-info{display:flex;gap:14px;margin-top:10px;font-size:12.5px;color:var(--muted)}
+  .route-info b{color:var(--text)}
+  .progress{height:6px;background:var(--inset);border-radius:4px;overflow:hidden;margin-top:10px}
+  .progress>div{height:100%;width:0;background:var(--blue);transition:width .1s}
+  .empty{color:var(--muted);font-size:12.5px;text-align:center;padding:8px 0}
+
+  .foot{margin-top:auto;font-size:11px;color:var(--faint);line-height:1.7;padding-top:4px}
+  .warn{color:var(--amberText);font-weight:500}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .hidden{display:none!important}
+
+  /* map custom markers */
+  .me-dot{width:18px;height:18px;border-radius:50%;background:#1a73e8;border:2.5px solid #fff;
+    box-shadow:0 0 0 4px rgba(26,115,232,.25),0 2px 6px rgba(0,0,0,.3)}
+  .wp-pin{width:26px;height:26px;border-radius:50% 50% 50% 0;background:#1a73e8;transform:rotate(-45deg);
+    border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+  .wp-pin span{transform:rotate(45deg);color:#fff;font-weight:700;font-size:12px}
+  .leaflet-bar a{background:var(--panel);color:var(--text2);border-color:var(--border)}
+  .leaflet-bar a:hover{background:var(--inset)}
+  .leaflet-bar{border:none!important;box-shadow:none!important}
+  /* custom zoom +/- buttons — two independent round-ish buttons, no dividers */
+  .zoom-ctl{display:flex;flex-direction:column;gap:8px;border:none;box-shadow:none;align-items:center}
+  .zoom-btn{width:44px;height:44px;padding:0;display:flex;align-items:center;justify-content:center;
+    background:var(--panel);border:1px solid var(--border2);border-radius:12px;color:var(--text2);
+    box-shadow:var(--shadow);cursor:pointer;transition:.12s}
+  .zoom-btn:hover{background:var(--inset2);color:var(--text)}
+  .zoom-btn:active{transform:translateY(.5px)}
+  /* top-left corner: zoom + compass, vertically stacked and centered on one axis */
+  .leaflet-top.leaflet-left{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 0 0 12px}
+  .leaflet-top.leaflet-left .leaflet-control{margin:0!important;float:none!important}
+  /* recenter button — round, bottom-aligned with the layer switcher */
+  .map-recenter{width:46px;height:46px;border-radius:50%;background:var(--panel);
+    box-shadow:var(--shadow);cursor:pointer;display:flex;align-items:center;justify-content:center;
+    color:var(--blue)}
+  .map-recenter:hover{background:var(--inset2)}
+  .map-recenter svg{display:block}
+  /* bottom-left corner: layer switcher + recenter in one row, bottom-aligned,
+     sitting right next to the side panel. order: layer chip, then recenter. */
+  .leaflet-bottom.leaflet-left{display:flex;flex-direction:row;align-items:flex-end;gap:10px;
+    padding:0 0 14px 14px}
+  .leaflet-bottom.leaflet-left .leaflet-control{margin:0!important;float:none!important;line-height:0}
+  .leaflet-bottom.leaflet-left .gm-layers{order:1;display:block}
+  .leaflet-bottom.leaflet-left .map-recenter{order:2}
+  /* compass */
+  .map-compass{width:44px;height:44px;border-radius:50%;background:var(--panel);
+    box-shadow:var(--shadow);cursor:grab;display:flex;align-items:center;justify-content:center;
+    touch-action:none;user-select:none}
+  .map-compass:active{cursor:grabbing}
+  .map-compass svg{display:block}
+
+  /* ---------- Google-Maps-style layer switcher ---------- */
+  .gm-layers{position:relative;font-family:inherit}
+  .gm-layers-chip{padding:0;border:none;background:none;cursor:pointer;border-radius:12px;overflow:hidden;
+    box-shadow:0 2px 6px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.2);width:86px;height:86px;position:relative}
+  .gm-chip-thumb{position:absolute;inset:0;background-size:cover;background-position:center}
+  .gm-chip-label{position:absolute;left:0;right:0;bottom:0;padding:5px 0;font-size:11.5px;font-weight:600;
+    color:#fff;text-align:center;background:linear-gradient(transparent,rgba(0,0,0,.65));z-index:1}
+  .gm-layers-chip::after{content:"";position:absolute;inset:0;border:3px solid #fff;border-radius:12px;
+    pointer-events:none;box-sizing:border-box}
+  .gm-layers-panel{position:absolute;left:0;bottom:96px;display:none;gap:12px;
+    background:var(--panel-glass);backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);
+    border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow)}
+  .gm-layers.open .gm-layers-panel{display:flex}
+  .gm-layers.open .gm-layers-chip{outline:2px solid var(--blue);outline-offset:2px}
+  .gm-layer-opt{display:flex;flex-direction:column;align-items:center;gap:6px;padding:0;border:none;
+    background:none;cursor:pointer;width:64px;box-shadow:none}
+  .gm-layer-opt:hover{background:none}
+  .gm-opt-thumb{width:62px;height:62px;border-radius:10px;background-size:cover;background-position:center;
+    border:2px solid transparent;box-sizing:border-box;transition:.15s}
+  .gm-layer-opt:hover .gm-opt-thumb{border-color:var(--border2)}
+  .gm-layer-opt.on .gm-opt-thumb{border-color:var(--blue)}
+  .gm-opt-label{font-size:11.5px;color:var(--muted);font-weight:500}
+  .gm-layer-opt.on .gm-opt-label{color:var(--blueText);font-weight:600}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <div class="head">
+      <div class="title">
+        <h1><span class="dot" id="dot"></span> <span class="brand">Any<span>Loc</span></span></h1>
+        <div class="sub" data-i18n="app.sub">iOS 定位模拟 · 点地图即传送</div>
+      </div>
+      <div class="head-actions">
+        <button class="icon-btn" id="themeBtn" title="Theme"></button>
+        <div class="lang" id="langWrap">
+          <button class="lang-btn" id="langBtn" title="Language / 语言 / 言語">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/></svg>
+            <span id="langCur">中文</span>
+            <svg class="chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="lang-menu" id="langMenu"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Device -->
+    <div class="card">
+      <h2 data-i18n="device.title">设备</h2>
+      <div class="status-line" id="deviceInfo" data-i18n="device.notConnected">未连接。</div>
+      <div class="dm-banner" id="dmBanner"></div>
+      <div style="margin-top:9px" class="row">
+        <button class="primary" id="btnConnect" data-i18n="btn.connect">连接</button>
+        <button class="danger" id="btnClear" data-i18n="btn.reset" data-i18n-title="btn.reset.title" title="停止模拟，恢复真实 GPS">恢复真实定位</button>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div class="card">
+      <h2><span data-i18n="search.title">搜索 / 前往</span> <span class="coord" id="curCoordMini"></span></h2>
+      <div class="search-wrap">
+        <svg class="search-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="search" data-i18n-ph="search.ph" placeholder="地点名或 纬度, 经度" autocomplete="off"/>
+        <ul id="searchResults"></ul>
+      </div>
+      <div class="chips" id="favChips"></div>
+    </div>
+
+    <!-- Movement -->
+    <div class="card">
+      <h2 data-i18n="move.title">移动</h2>
+      <div class="tabs">
+        <button id="tabFree" class="on" data-i18n="tab.free">自由移动</button>
+        <button id="tabRoute" data-i18n="tab.route">路线行走</button>
+      </div>
+
+      <!-- shared speed -->
+      <div style="margin-top:14px">
+        <label data-i18n="speed.label">速度</label>
+        <div class="speeds" id="speeds">
+          <button data-mps="1.4" title="" data-i18n-title="speed.walk">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="4" r="2"/><path d="M7 21l3-5 1-4-3-2-2 4M13 11l-2-4 4 1 2 3M11 12l1 4-1 5"/></svg>
+            <span data-i18n="speed.walk">步行</span>
+          </button>
+          <button data-mps="4" class="on" title="" data-i18n-title="speed.run">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4" r="2"/><path d="M6 20l3-4 3-2-2-4-4 2M12 10l3 2 4-1M12 14l1 6"/></svg>
+            <span data-i18n="speed.run">跑步</span>
+          </button>
+          <button data-mps="8.3" title="" data-i18n-title="speed.bike">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.5" r="3.3"/><circle cx="18.5" cy="17.5" r="3.3"/><path d="M6 17.5l4-8h5l-3 8M14 6h3l1.5 11.5M10 9.5h6"/></svg>
+            <span data-i18n="speed.bike">骑行</span>
+          </button>
+          <button data-mps="16.7" title="" data-i18n-title="speed.drive">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2-5a2 2 0 0 1 1.9-1.3h10.2A2 2 0 0 1 19 8l2 5v5a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M6.5 16h.01M17.5 16h.01M3 13h18"/></svg>
+            <span data-i18n="speed.drive">驾车</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- FREE mode -->
+      <div id="freePanel">
+        <div id="joyWrap">
+          <div id="joy"><div id="joyNub"></div></div>
+          <div class="hint" data-i18n-html="free.hint">
+            拖动摇杆，或用 <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / 方向键。<br/>
+            按住 <kbd>Shift</kbd> = 3× 速度。
+          </div>
+        </div>
+      </div>
+
+      <!-- ROUTE mode -->
+      <div id="routePanel" class="hidden">
+        <div class="hint" style="margin-top:10px" data-i18n="route.hint">
+          在地图上依次点击设置途经点（A→B→C…），沿真实道路自动行走。
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div style="flex:1.4">
+            <label data-i18n="route.type">路线类型</label>
+            <select id="routeProfile">
+              <option value="walking" data-i18n="route.walking">步行路线</option>
+              <option value="cycling" data-i18n="route.cycling">骑行路线</option>
+              <option value="driving" selected data-i18n="route.driving">驾车路线</option>
+            </select>
+          </div>
+        </div>
+        <ul class="wp-list" id="wpList"><li class="empty" id="wpEmpty" data-i18n="route.empty">还没有途经点</li></ul>
+        <div class="route-info hidden" id="routeInfo">
+          <span><span data-i18n="route.dist">距离</span> <b id="riDist">–</b></span>
+          <span><span data-i18n="route.time">预计</span> <b id="riTime">–</b></span>
+        </div>
+        <div class="progress hidden" id="walkProgress"><div></div></div>
+        <div class="row" style="margin-top:10px">
+          <button class="blue" id="btnPlan" data-i18n="btn.plan">规划路线</button>
+          <button id="btnClearRoute" data-i18n="btn.clearRoute">清除</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="btnWalk" disabled data-i18n="btn.start">▶ 开始</button>
+          <button class="danger" id="btnStop" disabled data-i18n="btn.stop">■ 停止</button>
+        </div>
+        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="loopChk" style="width:auto"/> <span data-i18n="route.loop">循环行走</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Current position -->
+    <div class="card">
+      <h2 data-i18n="pos.title">当前模拟位置</h2>
+      <div class="coord" id="curCoord">—</div>
+      <div class="status-line" style="margin-top:6px">
+        <span data-i18n="status.label">状态：</span><span class="pill idle" id="statePill">idle</span>
+      </div>
+    </div>
+
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
+<script src="i18n.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+
+# ---- Virtual envs (build machines) ----
+.venv/
+.venv-mac/
+venv/
+
+# ---- PyInstaller build output ----
+build/
+dist/
+*.manifest
+
+# Keep the spec (it IS source): AnyLoc.spec is tracked.
+
+# ---- macOS cruft ----
+.DS_Store
+
+# ---- Editor ----
+.idea/
+.vscode/
+
+# Stale build fragment from an earlier Windows onedir build (not source)
+AnyLoc-App/
