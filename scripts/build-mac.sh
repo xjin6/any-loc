@@ -4,7 +4,7 @@
 # =============================================================================
 #  产物：
 #    dist/AnyLoc.app          —— 可直接拖进「应用程序」双击运行
-#    dist/AnyLoc-1.0.0.pkg    —— 安装包，双击后自动装进 /Applications
+#    dist/AnyLoc-1.1.0.pkg    —— 安装包，双击后自动装进 /Applications
 #
 #  用法：
 #    ./build-mac.sh              # 正式版（带 root 提权流程）
@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VARIANT="${1:-final}"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 if [ "$VARIANT" = "test" ]; then
   APP_NAME="AnyLocTest"

@@ -28,6 +28,10 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metada
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MACOS = sys.platform == "darwin"
 
+# App version — bump here on release. Referenced by the macOS .app bundle below.
+# Keep this in sync with VERSION in scripts/build-mac.sh (used for the .pkg name).
+APP_VERSION = "1.1.0"
+
 VARIANT = os.environ.get("ANYLOC_VARIANT", "final")
 if VARIANT == "test":
     APP_NAME, UAC = "AnyLocTest", False
@@ -161,12 +165,12 @@ else:
             name=f"{APP_NAME}.app",
             icon=None,
             bundle_identifier=BUNDLE_ID,
-            version="1.0.0",
+            version=APP_VERSION,
             info_plist={
                 "CFBundleName": APP_NAME,
                 "CFBundleDisplayName": APP_NAME,
-                "CFBundleShortVersionString": "1.0.0",
-                "CFBundleVersion": "1.0.0",
+                "CFBundleShortVersionString": APP_VERSION,
+                "CFBundleVersion": APP_VERSION,
                 "NSHighResolutionCapable": True,
                 "LSMinimumSystemVersion": "11.0",
                 # Not a background-only agent: we want it to appear/activate
