@@ -19,7 +19,7 @@ handled automatically:
 |---|---|---|
 | **Elevation** (the tunnel needs it) | Administrator via a **UAC** prompt | root via **sudo** (login password) |
 | **USB driver** for the iPhone | needs **iTunes / Apple Mobile Device Support** | built into macOS (**nothing to install**) |
-| **Ships as** | `AnyLoc.exe` (folder) | `AnyLoc.app` + `AnyLoc.pkg` |
+| **Ships as** | a single `AnyLoc.exe` | `AnyLoc.app` + `AnyLoc.pkg` |
 
 ---
 
@@ -50,10 +50,12 @@ handled automatically:
 
 ### Windows
 
-1. Double-click **`AnyLoc.exe`** (or the desktop shortcut).
+1. Download **`AnyLoc.exe`** and double-click it. It's a single self-contained
+   file — no install, nothing to unzip.
 2. Allow the **UAC** prompt (the tunnel needs Administrator).
 3. A console window opens (leave it open; you can minimize it) and your browser
    opens `http://127.0.0.1:8765/`.
+   (First launch takes a few extra seconds — the single exe unpacks itself once.)
 4. Click **Connect**. When the dot turns green, you're live.
 5. **Click anywhere on the map** to teleport, or use the **joystick / WASD / arrows**
    to move. Pick a speed (Walk / Run / Bike / Drive); hold **Shift** for 3×.
@@ -137,16 +139,20 @@ PyInstaller and `import backend` assume they sit together. The `scripts/` helper
 
 The same `AnyLoc.spec` builds on both OSes; `ANYLOC_VARIANT` picks test vs. shippable.
 
-### Windows → `AnyLoc.exe`
+### Windows → a single `AnyLoc.exe`
 ```powershell
 # test build (no admin manifest, so you can --selftest without UAC)
 $env:ANYLOC_VARIANT="test";  pyinstaller --clean --noconfirm AnyLoc.spec
-dist\AnyLocTest\AnyLocTest.exe --selftest     # expect RESULT: PASS
+dist\AnyLocTest.exe --selftest                 # expect RESULT: PASS
 
 # shippable build (bakes the requireAdministrator manifest → UAC)
 $env:ANYLOC_VARIANT="final"; pyinstaller --clean --noconfirm AnyLoc.spec
-# result is the whole dist\AnyLoc\ folder
+# result is a single file: dist\AnyLoc.exe
 ```
+Windows builds as **one self-contained `AnyLoc.exe`** (onefile). On a locked-down
+machine where WDAC / Application Control blocks running unpacked code from `%TEMP%`,
+build the folder form instead: set `$env:ANYLOC_ONEDIR="1"` before running
+PyInstaller — you'll get a `dist\AnyLoc\` folder (keep it together, run the exe inside).
 
 ### macOS → `AnyLoc.app` + `AnyLoc.pkg`
 ```bash
