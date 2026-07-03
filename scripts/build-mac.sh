@@ -14,7 +14,8 @@
 #  脚本会优先使用项目里的 .venv-mac / .venv 虚拟环境。
 # =============================================================================
 set -euo pipefail
-cd "$(dirname "$0")"
+# this script lives in scripts/, so cd up to the project root first
+cd "$(dirname "$0")/.."
 
 VARIANT="${1:-final}"
 VERSION="1.0.0"

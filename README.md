@@ -110,6 +110,29 @@ python backend.py --port 8765 --no-browser -v
 
 ---
 
+## Project layout
+
+```
+any-loc/
+├── launcher.py       all-in-one entry point (self-elevates, starts server + tunnel)
+├── backend.py        device worker + static server + JSON API (stdlib only)
+├── AnyLoc.spec       PyInstaller build spec (Windows .exe / macOS .app)
+├── requirements.txt  Python dependencies
+├── web/              the UI (index.html, app.js, i18n.js, config.js, icons)
+└── scripts/          launch & build helpers
+    ├── dev.bat / dev.command    dev mode (UI hot-reload, optional real tunnel)
+    ├── AnyLoc.command           run-from-source launcher (macOS, no packaging)
+    ├── build-mac.sh             build AnyLoc.app + AnyLoc.pkg
+    ├── make_icon.py             regenerate web/icon.ico + icon-256.png
+    └── winpreview.py            experimental native-window preview (pywebview)
+```
+
+`launcher.py`, `backend.py`, `AnyLoc.spec`, and `web/` must stay at the repo root —
+PyInstaller and `import backend` assume they sit together. The `scripts/` helpers
+`cd` back to the root before running.
+
+---
+
 ## Building from source
 
 The same `AnyLoc.spec` builds on both OSes; `ANYLOC_VARIANT` picks test vs. shippable.
@@ -127,20 +150,27 @@ $env:ANYLOC_VARIANT="final"; pyinstaller --clean --noconfirm AnyLoc.spec
 
 ### macOS → `AnyLoc.app` + `AnyLoc.pkg`
 ```bash
-./build-mac.sh          # shippable: dist/AnyLoc.app + dist/AnyLoc-1.0.0.pkg
-./build-mac.sh test     # test: dist/AnyLocTest.app (validate with --selftest)
+./scripts/build-mac.sh          # shippable: dist/AnyLoc.app + dist/AnyLoc-1.0.0.pkg
+./scripts/build-mac.sh test     # test: dist/AnyLocTest.app (validate with --selftest)
 
 # validate the test app without root:
 dist/AnyLocTest.app/Contents/MacOS/AnyLocTest --selftest   # expect RESULT: PASS
 ```
-`build-mac.sh` runs PyInstaller, ad-hoc code-signs the `.app` (so Gatekeeper lets it
+`scripts/build-mac.sh` runs PyInstaller, ad-hoc code-signs the `.app` (so Gatekeeper lets it
 run at all), then wraps it into a `.pkg` that installs into `/Applications`.
 
 ### Dev mode (fast UI iteration, no packaging)
 Edit anything under `web/` and the browser auto-refreshes in ~1s.
-- **Windows:** double-click `dev.bat` (UI only), or right-click → **Run as administrator**
+- **Windows:** double-click `scripts/dev.bat` (UI only), or right-click → **Run as administrator**
   (adds the real tunnel so you can test on a device).
-- **macOS:** `./dev.command` (UI only), or `sudo ./dev.command` (adds the real tunnel).
+- **macOS:** `./scripts/dev.command` (UI only), or `sudo ./scripts/dev.command` (adds the real tunnel).
+
+### App icon
+The icon is generated from code — no binary editing. Regenerate `web/icon.ico` +
+`web/icon-256.png` with:
+```bash
+python scripts/make_icon.py     # needs Pillow: pip install pillow
+```
 
 ---
 

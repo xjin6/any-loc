@@ -327,6 +327,7 @@ const marker = L.marker(START, { draggable: true, icon: meIcon, zIndexOffset: 10
 let pos = { lat: START[0], lon: START[1] };
 let speedMps = 4;
 let mode = "free";           // "free" | "route"
+let curState = "idle";       // last known backend state (for button logic)
 
 // ---------- position send (coalesced, latest-wins) ----------
 let pending = null, sending = false, lastSent = 0;
@@ -376,7 +377,31 @@ $("btnConnect").addEventListener("click", async () => {
   setTimeout(poll, 300);
 });
 $("btnClear").addEventListener("click", async () => {
-  try { await fetch("/api/clear", { method: "POST" }); } catch (e) {}
+  const btn = $("btnClear");
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = t("btn.resetting");
+  try {
+    // If the session isn't live (idle/error/never connected), reconnect first
+    // so the clear command actually reaches the device.
+    if (curState !== "connected") {
+      await fetch("/api/connect", { method: "POST" });
+      // give the session a moment to come up before clearing
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 300));
+        try {
+          const s = await (await fetch("/api/status")).json();
+          curState = s.state;
+          if (s.state === "connected" || s.state === "error") break;
+        } catch (e) {}
+      }
+    }
+    await fetch("/api/clear", { method: "POST" });
+  } catch (e) {}
+  btn.disabled = false;
+  btn.textContent = orig;
+  setTimeout(poll, 300);
 });
 
 // ============================================================================
@@ -722,10 +747,28 @@ function wpIcon(i) {
 function addWaypoint(lat, lon) {
   const m = L.marker([lat, lon], { icon: wpIcon(waypoints.length), draggable: true }).addTo(map);
   const wp = { lat, lon, marker: m };
-  m.on("dragend", () => { const ll = m.getLatLng(); wp.lat = ll.lat; wp.lon = ll.lng; renderWaypoints(); });
+  m.on("dragend", () => { const ll = m.getLatLng(); wp.lat = ll.lat; wp.lon = ll.lng; renderWaypoints(); clearRouteLine(); });
+  // click marker -> small popup with a delete button
+  m.bindPopup(`<button class="wp-pop-del">🗑 <span>${t("wp.delete")}</span></button>`, {
+    closeButton: false, className: "wp-popup", offset: [0, -18],
+  });
+  m.on("popupopen", (e) => {
+    const btn = e.popup.getElement().querySelector(".wp-pop-del");
+    if (btn) btn.addEventListener("click", () => { m.closePopup(); removeWaypoint(wp); });
+  });
   waypoints.push(wp);
   renderWaypoints();
 }
+function removeWaypoint(wp) {
+  const i = waypoints.indexOf(wp);
+  if (i < 0) return;
+  map.removeLayer(wp.marker);
+  waypoints.splice(i, 1);
+  renderWaypoints();
+  clearRouteLine();
+}
+
+let dragFromIdx = -1;
 function renderWaypoints() {
   const list = $("wpList");
   list.innerHTML = "";
@@ -733,11 +776,36 @@ function renderWaypoints() {
   waypoints.forEach((wp, i) => {
     wp.marker.setIcon(wpIcon(i));
     const li = document.createElement("li");
-    li.innerHTML = `<span class="wp-badge">${String.fromCharCode(65 + i)}</span>` +
+    li.draggable = true;
+    li.dataset.i = i;
+    li.title = t("wp.reorder");
+    li.innerHTML =
+      `<span class="wp-grip" aria-hidden="true">⋮⋮</span>` +
+      `<span class="wp-badge">${String.fromCharCode(65 + i)}</span>` +
       `<span class="wp-co">${fmt(wp.lat, 5)}, ${fmt(wp.lon, 5)}</span>` +
       `<span class="wp-x" title="${t("fav.delete")}">×</span>`;
-    li.querySelector(".wp-x").addEventListener("click", () => {
-      map.removeLayer(wp.marker); waypoints.splice(i, 1); renderWaypoints(); clearRouteLine();
+    li.querySelector(".wp-x").addEventListener("click", () => removeWaypoint(wp));
+    // ---- drag-to-reorder (native HTML5 DnD) ----
+    li.addEventListener("dragstart", (e) => {
+      dragFromIdx = i; li.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", String(i)); } catch (err) {}
+    });
+    li.addEventListener("dragend", () => {
+      dragFromIdx = -1; li.classList.remove("dragging");
+      list.querySelectorAll("li").forEach((x) => x.classList.remove("drop-target"));
+    });
+    li.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      if (+li.dataset.i !== dragFromIdx) li.classList.add("drop-target"); });
+    li.addEventListener("dragleave", () => li.classList.remove("drop-target"));
+    li.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const to = +li.dataset.i;
+      if (dragFromIdx < 0 || dragFromIdx === to) return;
+      const [moved] = waypoints.splice(dragFromIdx, 1);
+      waypoints.splice(to, 0, moved);
+      renderWaypoints();
+      clearRouteLine();   // order changed -> old route invalid, re-plan
     });
     list.appendChild(li);
   });
@@ -881,6 +949,7 @@ async function poll() {
   } catch (e) { applyStatus({ state: "error", error: t("status.backendDown") }); }
 }
 function applyStatus(s) {
+  curState = s.state || "idle";
   const pill = $("statePill");
   pill.className = "pill " + (s.state || "idle");
   pill.textContent = t("state." + s.state) || s.state;

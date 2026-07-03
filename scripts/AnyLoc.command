@@ -12,7 +12,7 @@
 #  （给最终用户的“装进 Application 就能用”的版本是 AnyLoc.app / AnyLoc.pkg，
 #    用 ./build-mac.sh 生成。这个 .command 主要给开发/免打包快速使用。）
 # ============================================================
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # Prefer a project venv if present, else fall back to python3 on PATH.
 if [ -x ".venv-mac/bin/python" ]; then

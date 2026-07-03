@@ -8,7 +8,8 @@
 #   * sudo ./dev.command          = 网页热重载 + 真机隧道，能实测定位
 # ============================================================
 set -e
-cd "$(dirname "$0")"
+# this script lives in scripts/, so cd up to the project root first
+cd "$(dirname "$0")/.."
 
 echo "============================================================"
 if [ "$(id -u)" = "0" ]; then

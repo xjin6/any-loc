@@ -207,6 +207,18 @@ class DeviceWorker:
                 self.error = None
                 log.info("LocationSimulation channel open. Ready to spoof.")
 
+                # If a clear was requested while we were (re)connecting — e.g. the
+                # user hit "Reset real GPS" from an error state, which triggers a
+                # reconnect — honour it right away so the button actually works.
+                if self._want_clear:
+                    self._want_clear = False
+                    try:
+                        await loc.clear()
+                        self.applied = None
+                        log.info("Pending clear applied on connect (real GPS restored).")
+                    except Exception:
+                        log.exception("pending clear failed")
+
                 # Apply an initial target immediately if one is already queued.
                 if self.target is not None:
                     self._dirty.set()
