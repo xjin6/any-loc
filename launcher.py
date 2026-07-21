@@ -402,6 +402,15 @@ def main() -> None:
         print("[selftest] RESULT:", "PASS" if ok else "FAIL")
         sys.exit(0 if ok else 1)
 
+    # 0) Pick a device backend. Android needs neither elevation nor the tunnel,
+    #    so we decide BEFORE elevating. Explicit --ios / --android override the
+    #    probe; otherwise, if an authorized Android device is plugged in, use it.
+    force_ios = "--ios" in sys.argv
+    force_android = "--android" in sys.argv
+    use_android = force_android or (not force_ios and detect_android())
+    if use_android:
+        return run_android(log)
+
     # 1) elevate — the tunnel needs Administrator (Windows) / root (macOS).
     if not is_admin():
         if IS_WINDOWS:
@@ -465,6 +474,142 @@ def main() -> None:
             httpd.shutdown()
         except Exception:
             pass
+
+
+# =============================================================================
+# Android path (adb) — no elevation, no tunnel.
+# =============================================================================
+def detect_android() -> bool:
+    """True if an authorized Android device is reachable via the bundled adb.
+
+    Cheap, non-elevated probe run before the iOS elevation step. Any failure
+    (adb missing, no device, only-unauthorized) returns False so we fall back to
+    the iOS path.
+    """
+    try:
+        import subprocess
+        from android_backend import find_adb
+        adb = find_adb()
+        # start-server is idempotent and quick; ignore its output.
+        subprocess.run([adb, "start-server"], capture_output=True, timeout=15)
+        out = subprocess.run([adb, "devices"], capture_output=True, timeout=15,
+                             text=True).stdout
+        for line in out.splitlines()[1:]:
+            line = line.strip()
+            if "\t" in line and line.split("\t", 1)[1].strip() == "device":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def run_android(log) -> None:
+    """Run AnyLoc against an Android device over adb. No elevation, no tunnel.
+
+    Mirrors main()'s iOS path minus the parts that only iOS needs: no UAC/sudo,
+    no TunneldRunner. The web server is a daemon thread, so an AdbWatcher loop on
+    the MAIN thread both reports connection status and keeps the process alive.
+    """
+    from android_backend import AndroidBackend
+
+    print("\n" + "=" * 62)
+    print("  AnyLoc  —  Android mode (adb)")
+    print("  No administrator needed. This one window runs everything;")
+    print("  you can MINIMIZE it, but keep it open while spoofing.")
+    print("=" * 62 + "\n")
+
+    worker = backend.DeviceWorker(AndroidBackend())
+    worker.start()
+    worker.connect()  # the UI's Connect button retries too
+    try:
+        httpd = start_web_server(worker)
+    except OSError as e:
+        _native_error(
+            f"Could not start the web UI on {WEB_HOST}:{WEB_PORT}.\n{e}\n\n"
+            "Is AnyLoc already running?", "AnyLoc")
+        return
+
+    url = f"http://{WEB_HOST}:{WEB_PORT}/"
+    log.info("Web UI:  %s", url)
+    threading.Timer(1.2, lambda: open_browser(url)).start()
+
+    # Main-thread keep-alive + connection watcher. Reports human-readable status
+    # into worker.devmode so the UI can guide the user (plug in / authorize).
+    watcher = AdbWatcher(worker)
+    try:
+        watcher.run_blocking()   # blocks until Ctrl-C / window closed
+    except KeyboardInterrupt:
+        pass
+    finally:
+        log.info("Shutting down.")
+        try:
+            worker.shutdown()
+            httpd.shutdown()
+        except Exception:
+            pass
+
+
+class AdbWatcher:
+    """
+    Main-thread loop for Android mode: polls `adb devices` and writes a friendly
+    setup status into worker.devmode (reusing the same status channel the iOS
+    DevModeWatcher uses, so the UI banner just works). Also nudges the worker to
+    (re)connect when a device appears. Blocks the main thread → keeps the process
+    alive (the web server runs on a daemon thread).
+
+    devmode states (Android): adb_waiting | adb_unauthorized | adb_ready | adb_error
+    """
+
+    def __init__(self, worker: "backend.DeviceWorker"):
+        self.worker = worker
+        self._stop = threading.Event()
+
+    def _set(self, state: str, msg: str = ""):
+        self.worker.devmode = {"state": state, "msg": msg}
+
+    def run_blocking(self):
+        import subprocess
+        from android_backend import find_adb
+        adb = find_adb()
+        last_ready = None
+        while not self._stop.is_set():
+            state, serial = "adb_waiting", None
+            try:
+                out = subprocess.run([adb, "devices"], capture_output=True,
+                                     timeout=15, text=True).stdout
+                rows = []
+                for line in out.splitlines()[1:]:
+                    line = line.strip()
+                    if "\t" in line:
+                        s, st = line.split("\t", 1)
+                        rows.append((s.strip(), st.strip()))
+                ready = [s for s, st in rows if st == "device"]
+                unauth = [s for s, st in rows if st == "unauthorized"]
+                if ready:
+                    state, serial = "adb_ready", ready[0]
+                elif unauth:
+                    state = "adb_unauthorized"
+                else:
+                    state = "adb_waiting"
+            except Exception as e:
+                state = "adb_error"
+                self._set(state, str(e))
+                time.sleep(2.0)
+                continue
+
+            self._set(state)
+            # When a device becomes ready and the worker isn't connected, connect.
+            if state == "adb_ready" and last_ready != serial:
+                self.worker.connect()
+            if state != "adb_ready":
+                # device unplugged / de-authorized → drop back so it reconnects.
+                last_ready = None
+            else:
+                last_ready = serial
+            time.sleep(2.0)
+
+    def stop(self):
+        self._stop.set()
 
 
 class DevModeWatcher:
