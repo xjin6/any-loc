@@ -287,7 +287,7 @@ def run_dev(log) -> None:
     print("  按 Ctrl+C 停止。")
     print("=" * 62 + "\n")
 
-    worker = backend.DeviceWorker(*__tunneld_addr())
+    worker = _ios_worker()
     worker.start()
 
     # bind the web server on the dev port
@@ -372,7 +372,7 @@ def main() -> None:
     # frozen import graph + web server work, then exit. Used to validate builds.
     if "--selftest" in sys.argv:
         print("[selftest] booting web stack (no elevation, no tunnel) ...")
-        worker = backend.DeviceWorker(*__tunneld_addr())
+        worker = _ios_worker()
         worker.start()
         try:
             httpd = start_web_server(worker)
@@ -428,7 +428,7 @@ def main() -> None:
         return
 
     # 3) start web UI + device worker (background)
-    worker = backend.DeviceWorker(*__tunneld_addr())
+    worker = _ios_worker()
     worker.start()
     worker.connect()  # will keep retrying via the UI's Connect button too
     try:
@@ -587,6 +587,12 @@ class DevModeWatcher:
 def __tunneld_addr():
     from pymobiledevice3.tunneld.api import TUNNELD_DEFAULT_ADDRESS
     return TUNNELD_DEFAULT_ADDRESS
+
+
+def _ios_worker():
+    """Build a DeviceWorker wired to the iOS (pymobiledevice3) backend."""
+    from ios_backend import IosBackend
+    return backend.DeviceWorker(IosBackend(*__tunneld_addr()))
 
 
 if __name__ == "__main__":

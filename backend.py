@@ -2,19 +2,22 @@
 """
 any-loc backend
 ===============
-A tiny local server that lets you spoof your iPhone/iPad GPS from a Google-Maps-style
-web UI. Cross-platform (Windows + macOS).
+A tiny local server that lets you spoof your iPhone/iPad OR Android GPS from a
+Google-Maps-style web UI. Cross-platform (Windows + macOS).
 
-How it works (iOS 17+):
-  1. `pymobiledevice3 remote tunneld` (elevated: admin on Windows / root on macOS)
-     creates a RemoteXPC tunnel to the device and exposes it on 127.0.0.1:49151.
-  2. This backend asks tunneld for the device, mounts the Developer Disk Image if needed,
-     then opens Apple's DVT `LocationSimulation` channel and KEEPS IT OPEN.
-  3. The web UI streams (lat, lon) updates; we apply the latest one on the open channel.
-     Keeping the channel open is what makes joystick movement smooth (the one-shot CLI
-     reconnects on every call, which is far too slow to drive).
+How it works:
+  - The web UI streams (lat, lon) updates; we apply the latest one on an open
+    channel to the device. Keeping the channel open is what makes joystick
+    movement smooth (reconnecting on every call is far too slow to drive).
+  - The device-specific part lives behind a LocationBackend (see backend_base.py):
+      * iOS     — pymobiledevice3 tunnel + Apple DVT LocationSimulation
+                  (ios_backend.py). Needs elevation for the tunnel.
+      * Android — bundled adb + the system `cmd location` test-provider
+                  (android_backend.py). No elevation needed.
+    DeviceWorker owns everything generic (asyncio loop, state machine, the
+    latest-wins mover loop) and just calls the backend for the device touchpoints.
 
-Everything here is Python stdlib except `pymobiledevice3`. No web framework.
+Everything here is Python stdlib; the device backends pull in their own deps.
 """
 
 import argparse
@@ -28,29 +31,7 @@ import webbrowser
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# ---- pymobiledevice3 (verified against v9.32.0) -----------------------------
-try:
-    from pymobiledevice3.tunneld.api import (
-        TUNNELD_DEFAULT_ADDRESS,
-        get_tunneld_devices,
-    )
-    from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
-    from pymobiledevice3.services.dvt.instruments.location_simulation import (
-        LocationSimulation,
-    )
-    from pymobiledevice3.services.mobile_image_mounter import auto_mount
-    from pymobiledevice3.exceptions import (
-        AlreadyMountedError,
-        TunneldConnectionError,
-    )
-except Exception as exc:  # pragma: no cover
-    print(
-        "\n[any-loc] Could not import pymobiledevice3.\n"
-        "          Install it with:  pip install -U pymobiledevice3\n"
-        f"          Import error: {exc}\n",
-        file=sys.stderr,
-    )
-    raise
+from backend_base import LocationBackend
 
 log = logging.getLogger("any-loc")
 
@@ -66,13 +47,14 @@ else:
 WEB_DIR = os.path.join(_BASE_DIR, "web")
 
 
+
 # =============================================================================
 # Device worker: owns an asyncio loop on its own thread, holds the DVT channel
 # open, and applies the latest requested coordinate.
 # =============================================================================
 class DeviceWorker:
-    def __init__(self, tunneld_host: str, tunneld_port: int):
-        self.tunneld_addr = (tunneld_host, tunneld_port)
+    def __init__(self, backend: LocationBackend):
+        self.backend = backend
 
         self.loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -86,10 +68,11 @@ class DeviceWorker:
         # Public-ish state (plain attribute reads from HTTP threads; GIL-safe enough).
         self.state = "idle"             # idle | connecting | connected | error
         self.error = None
-        self.device = {}                # udid, product_type, product_version, name
+        self.device = {}                # neutral schema (see backend_base)
         self.target = None              # (lat, lon) desired
         self.applied = None             # (lat, lon) last applied on device
-        self.devmode = {"state": "idle", "msg": ""}  # Developer Mode setup status
+        self.devmode = {"state": "idle", "msg": ""}  # setup status (iOS DevMode / Android adb)
+
 
     # ---- lifecycle ----------------------------------------------------------
     def start(self):
@@ -137,7 +120,8 @@ class DeviceWorker:
             "target": self.target,
             "applied": self.applied,
             "devmode": self.devmode,
-            "tunneld": f"{self.tunneld_addr[0]}:{self.tunneld_addr[1]}",
+            "platform": getattr(self.backend, "platform", "unknown"),
+            **self.backend.status_extra(),
         }
 
     def shutdown(self):
@@ -151,61 +135,19 @@ class DeviceWorker:
 
     # ---- the session (runs on the worker loop) ------------------------------
     async def _device_alive(self) -> bool:
-        """Quick health check: is our device still present via tunneld?"""
+        """Quick health check: is our device still present?"""
         try:
-            rsds = await get_tunneld_devices(self.tunneld_addr)
+            return await self.backend.is_alive()
         except Exception:
             return False
-        my = (self.device or {}).get("udid")
-        if not rsds:
-            return False
-        if not my:
-            return True
-        return any(getattr(r, "udid", None) == my for r in rsds)
 
     async def _session(self):
         try:
-            log.info("Querying tunneld at %s:%s ...", *self.tunneld_addr)
-            try:
-                rsds = await get_tunneld_devices(self.tunneld_addr)
-            except TunneldConnectionError:
-                raise RuntimeError(
-                    "Cannot reach tunneld. Start AnyLoc with elevated rights "
-                    "(Windows: allow the UAC prompt; macOS: enter your password "
-                    "for sudo) and make sure the iPhone is plugged in and trusted."
-                )
-            if not rsds:
-                raise RuntimeError(
-                    "Tunnel is up but no device found. Unlock the iPhone, tap 'Trust', "
-                    "and enable Developer Mode (Settings > Privacy & Security > Developer Mode)."
-                )
-
-            rsd = rsds[0]
-            self.device = {
-                "udid": getattr(rsd, "udid", ""),
-                "product_type": getattr(rsd, "product_type", ""),
-                "product_version": getattr(rsd, "product_version", ""),
-                "name": getattr(rsd, "name", "") or "",
-            }
-            log.info("Device: %s (iOS %s)", self.device["product_type"],
-                     self.device["product_version"])
-
-            # Mount the Developer Disk Image (idempotent). Non-fatal if it fails,
-            # because it may already be mounted from a previous run.
-            try:
-                log.info("Ensuring Developer Disk Image is mounted ...")
-                await auto_mount(rsd)
-                log.info("DDI mounted.")
-            except AlreadyMountedError:
-                log.info("DDI already mounted.")
-            except Exception as e:
-                log.warning("auto_mount failed (continuing anyway): %s", e)
-
-            # Open the DVT location channel and keep it open for the session.
-            async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as loc:
+            async with self.backend.session() as sess:
+                self.device = self.backend.device_info()
                 self.state = "connected"
                 self.error = None
-                log.info("LocationSimulation channel open. Ready to spoof.")
+                log.info("Location channel open. Ready to spoof.")
 
                 # If a clear was requested while we were (re)connecting — e.g. the
                 # user hit "Reset real GPS" from an error state, which triggers a
@@ -213,7 +155,7 @@ class DeviceWorker:
                 if self._want_clear:
                     self._want_clear = False
                     try:
-                        await loc.clear()
+                        await sess.clear()
                         self.applied = None
                         log.info("Pending clear applied on connect (real GPS restored).")
                     except Exception:
@@ -229,12 +171,12 @@ class DeviceWorker:
                     try:
                         await asyncio.wait_for(self._dirty.wait(), timeout=3.0)
                     except asyncio.TimeoutError:
-                        # heartbeat: is the device still reachable via tunneld?
+                        # heartbeat: is the device still reachable?
                         if not await self._device_alive():
                             self.state = "idle"
                             self.error = None
                             self.device = {}
-                            log.info("Device disconnected (tunnel gone). Back to idle.")
+                            log.info("Device disconnected. Back to idle.")
                             return
                         continue
                     self._dirty.clear()
@@ -244,7 +186,7 @@ class DeviceWorker:
                     if self._want_clear:
                         self._want_clear = False
                         try:
-                            await loc.clear()
+                            await sess.clear()
                             self.applied = None
                             log.info("Location simulation cleared (real GPS restored).")
                         except Exception as e:
@@ -258,10 +200,10 @@ class DeviceWorker:
                     if target is None:
                         continue
                     try:
-                        await loc.set(float(target[0]), float(target[1]))
+                        await sess.apply(float(target[0]), float(target[1]))
                         self.applied = target
                     except Exception as e:
-                        # A failed set almost always means the device went away.
+                        # A failed apply almost always means the device went away.
                         if not await self._device_alive():
                             self.state = "idle"; self.error = None; self.device = {}
                             log.info("Device disconnected during set. Back to idle.")
@@ -278,6 +220,7 @@ class DeviceWorker:
         finally:
             if self.state != "error":
                 self.state = "idle"
+            self.device = {}
             log.info("Session ended (state=%s).", self.state)
 
 
@@ -397,6 +340,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    from ios_backend import IosBackend, TUNNELD_DEFAULT_ADDRESS
+
     ap = argparse.ArgumentParser(description="any-loc backend")
     ap.add_argument("--host", default="127.0.0.1", help="web UI bind host")
     ap.add_argument("--port", type=int, default=8765, help="web UI port")
@@ -418,7 +363,7 @@ def main():
         for noisy in ("pymobiledevice3", "urllib3", "asyncio"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    worker = DeviceWorker(args.tunneld_host, args.tunneld_port)
+    worker = DeviceWorker(IosBackend(args.tunneld_host, args.tunneld_port))
     worker.start()
     if not args.no_connect:
         worker.connect()
