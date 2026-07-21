@@ -11,6 +11,8 @@ venv/
 # ---- PyInstaller build output ----
 build/
 dist/
+build2/
+dist2/
 *.manifest
 
 # Keep the spec (it IS source): AnyLoc.spec is tracked.

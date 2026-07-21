@@ -50,6 +50,24 @@ EXE_ICON = os.path.join("web", "icon.ico") if IS_WINDOWS and os.path.exists(os.p
 datas, binaries, hiddenimports = [], [], []
 datas += [("web", "web")]
 
+# Bundle adb (Android Debug Bridge) so Android mode works with no separate SDK
+# install. android_backend.find_adb() looks for it at the _MEIPASS root when
+# frozen, so we ship it there (dest "."). Windows adb needs its two helper DLLs
+# next to it. Use `datas` (verbatim copy) rather than `binaries`: adb is a
+# standalone exe that doesn't want PyInstaller's shared-lib dependency analysis
+# (which silently drops it). Skipped gracefully if the vendor files aren't present.
+_adb_files = []
+if IS_WINDOWS:
+    _adb_files = [os.path.join("vendor", "win", f)
+                  for f in ("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll")]
+elif IS_MACOS:
+    _adb_files = [os.path.join("vendor", "mac", "adb")]
+for _p in _adb_files:
+    if os.path.exists(_p):
+        datas += [(_p, ".")]
+    else:
+        print(f"[spec] warn: {_p} missing — Android mode won't work in this build")
+
 # Packages to fully collect. `apple_compress` is macOS-only (pyimg4 pulls it in
 # on Darwin for LZFSE); harmless to list — collect_all just warns if absent.
 _collect_pkgs = [
@@ -96,6 +114,10 @@ hiddenimports += [
     "uvicorn.lifespan.on",
     "uvicorn.loops.asyncio",
 ]
+
+# Our own modules are imported lazily (inside functions) in a few places, so make
+# sure PyInstaller bundles them even if static analysis misses a path.
+hiddenimports += ["backend", "backend_base", "ios_backend", "android_backend"]
 
 # Tunnel-service modules: names have shifted across pymobiledevice3 versions
 # (e.g. `core_device_tunnel_service` was folded into `tunnel_service` around

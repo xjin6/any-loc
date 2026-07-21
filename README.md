@@ -1,15 +1,21 @@
 # any-loc
 
-A tiny, self-hosted **iOS GPS spoofer for Windows and macOS** with a Google-Maps-style
-web UI. Click the map to teleport your iPhone/iPad, or drive around with a joystick / WASD keys.
+A tiny, self-hosted **iOS & Android GPS spoofer for Windows and macOS** with a
+Google-Maps-style web UI. Click the map to teleport your iPhone/iPad or Android
+phone, or drive around with a joystick / WASD keys.
 
 This is a DIY, local-only take on tools like AnyGo / iToolab. Everything runs on your
 own machine; nothing is uploaded anywhere.
 
+AnyLoc **auto-detects** what you plug in: an Android phone (over adb) takes the
+Android path — no admin needed; otherwise it drives an iPhone/iPad over Apple's
+tunnel (which needs elevation). Same web UI either way.
+
 ```
-   Browser (map + joystick)  ──HTTP──►  backend.py  ──DVT channel──►  iPhone
-                                             │
-                                    pymobiledevice3 tunneld  (RemoteXPC tunnel)
+   Browser (map + joystick)  ──HTTP──►  backend.py ──┬─ iOS:     DVT LocationSimulation  ──► iPhone
+                                                      │          (pymobiledevice3 tunneld)
+                                                      └─ Android: adb `cmd location`     ──► Android phone
+                                                                 (bundled adb, no root)
 ```
 
 The exact same Python code runs on both OSes. Only two things differ, and both are
@@ -28,21 +34,35 @@ handled automatically:
 **Both platforms**
 - **Python 3.10+** (only needed if you run from source or build; end users of the
   packaged app don't need Python).
+- The one Python dependency: `pip install -U pymobiledevice3`
+
+### To spoof an iPhone/iPad
 - An **iPhone/iPad** with a Lightning/USB-C cable.
 - On the device: **Developer Mode ON**
   (`Settings > Privacy & Security > Developer Mode` → toggle on → reboot).
-- The one Python dependency: `pip install -U pymobiledevice3`
+- **Windows:** **iTunes / Apple Mobile Device Support** installed (provides the USB
+  driver Windows needs to see the iPhone). Installing Apple's iTunes from apple.com
+  is the easy way.
+- **macOS:** nothing extra — macOS already talks to iPhones over USB (`usbmuxd` is
+  built in).
 
-**Windows only**
-- **iTunes / Apple Mobile Device Support** installed (provides the USB driver Windows
-  needs to see the iPhone). Installing Apple's iTunes from apple.com is the easy way.
+### To spoof an Android phone
+- **Android 11 or newer** (AnyLoc uses the system `cmd location` command, added in
+  Android 11). Pure-HarmonyOS-NEXT Huawei devices (no adb) are not supported;
+  HarmonyOS 4 / EMUI and below still work.
+- **Developer Options** on, and **USB debugging** on
+  (`Settings > About phone` → tap *Build number* 7×, then `Settings > System >
+  Developer options > USB debugging`). On some phones (Xiaomi, Huawei) also enable
+  **USB debugging (Security settings)**.
+- Plug in with a USB cable and tap **Allow USB debugging** when the phone asks.
+- **No app to install, no root, and no admin/UAC** — `adb` is bundled with AnyLoc,
+  and it grants itself mock-location over adb. macOS talks to Android over USB with
+  nothing extra.
 
-**macOS only**
-- Nothing extra — macOS already talks to iPhones over USB (`usbmuxd` is built in).
-- **Architecture:** the packaged `AnyLoc.app` matches the Mac it was **built** on.
-  Built on Apple Silicon → an **Apple Silicon** app (won't run on Intel, and vice-versa).
-  For a universal app you'd build on each arch (or with a universal2 Python). Running
-  from source works on any Mac with Python.
+**macOS — architecture note:** the packaged `AnyLoc.app` matches the Mac it was
+**built** on (Apple Silicon build won't run on Intel and vice-versa). Running from
+source works on any Mac with Python.
+
 
 ---
 
