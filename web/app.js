@@ -964,9 +964,12 @@ function applyStatus(s) {
   // The device line: only show concrete device info when actually connected.
   // Otherwise defer to the (real-time) developer-mode banner below — we never
   // dump raw internal errors like "set failed: Channel is closed" to the user.
-  if (s.state === "connected" && d.product_type) {
-    $("deviceInfo").innerHTML = `<b>${d.product_type}</b> · iOS ${d.product_version || "?"}<br/>` +
-      `<span class="coord">${(d.udid || "").slice(0, 8)}…</span>`;
+  if (s.state === "connected" && d.model) {
+    // Neutral device schema (platform/id/model/os_version/name) — branch label
+    // on platform so iPhone shows "iOS", Android shows "Android".
+    const osLabel = d.platform === "android" ? "Android" : "iOS";
+    $("deviceInfo").innerHTML = `<b>${d.model}</b> · ${osLabel} ${d.os_version || "?"}<br/>` +
+      `<span class="coord">${(d.id || "").slice(0, 12)}…</span>`;
     $("deviceInfo").style.display = "";
   } else if (s.state === "connecting") {
     $("deviceInfo").textContent = t("device.connecting");
@@ -981,12 +984,17 @@ function applyStatus(s) {
 
   // developer-mode / device status banner — real-time, translated by state.
   // This is the single source of truth for "what's going on with the device".
+  // Covers both iOS Developer-Mode states and Android adb/USB-debugging states.
   const banner = $("dmBanner");
   const DM_KEY = { waiting: "dm.waiting", trust: "dm.trust", revealing: "dm.revealing",
-                   reveal_done: "dm.revealDone", enabled: "dm.enabled", error: "dm.error" };
+                   reveal_done: "dm.revealDone", enabled: "dm.enabled", error: "dm.error",
+                   // Android (adb) setup states:
+                   adb_waiting: "adb.waiting", adb_unauthorized: "adb.unauthorized",
+                   adb_ready: "adb.ready", adb_error: "adb.error" };
   if (dm.state && dm.state !== "idle" && DM_KEY[dm.state] && !(s.state === "connected")) {
     banner.className = "dm-banner show " + dm.state;
-    const icon = { waiting: "🔌", trust: "📱", revealing: "⚙️", reveal_done: "👉", enabled: "✅", error: "⚠️" }[dm.state] || "ℹ️";
+    const icon = { waiting: "🔌", trust: "📱", revealing: "⚙️", reveal_done: "👉", enabled: "✅", error: "⚠️",
+                   adb_waiting: "🔌", adb_unauthorized: "📱", adb_ready: "✅", adb_error: "⚠️" }[dm.state] || "ℹ️";
     banner.textContent = `${icon} ${t(DM_KEY[dm.state])}`;
   } else {
     banner.className = "dm-banner";
