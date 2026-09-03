@@ -59,6 +59,8 @@ h1,h2,h3{margin:0;font-weight:700;letter-spacing:-.03em;line-height:1.1}
 p{margin:0}
 
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+/* the demo needs room for the window AND the phone side by side */
+.wrap.wide{max-width:1340px}
 .mono{font-family:var(--mono)}
 
 /* hide the language that isn't active */
@@ -134,7 +136,13 @@ section{position:relative;z-index:1;padding:76px 0}
    Chrome (traffic lights + title bar) is what sells it as an app rather than
    a widget, so it is drawn faithfully rather than suggested.
    ========================================================================= */
-.demo-shell{max-width:1120px;margin:0 auto;position:relative}
+.demo-shell{max-width:1120px;margin:0 auto;position:relative;
+  display:flex;gap:26px;align-items:stretch;justify-content:center;
+  transition:max-width .5s cubic-bezier(.4,0,.2,1)}
+/* once connected the phone slides in, so the shell widens and the window
+   yields the space rather than the page reflowing around it */
+.demo-shell.paired{max-width:1340px}
+.demo-shell .window{flex:1;min-width:0}
 .demo-hint{display:flex;align-items:center;justify-content:center;gap:9px;
   font-size:13px;color:var(--fg3);margin-bottom:14px;font-family:var(--mono)}
 .demo-hint b{color:var(--green);font-weight:500}
@@ -154,7 +162,7 @@ section{position:relative;z-index:1;padding:76px 0}
   margin-right:52px}
 
 /* the app body: panel + map, mirroring the real 360px sidebar */
-.appbody{display:flex;height:560px;background:#fff;color:#202124}
+.appbody{display:flex;height:680px;background:#fff;color:#202124}
 .dpanel{width:330px;min-width:330px;border-right:1px solid #e3e5e8;padding:17px;
   overflow-y:auto;display:flex;flex-direction:column;gap:15px;
   font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
@@ -255,6 +263,76 @@ section{position:relative;z-index:1;padding:76px 0}
 .dpill.connected{background:#e6f4ea;color:#188038}
 .dcoord{font-family:var(--mono);font-size:13px;color:#3c4043}
 
+/* ============================================================================
+   THE PHONE — an iPhone mock-up that mirrors the spoofed location live.
+   It only exists once "connected", which is the whole narrative: AnyLoc is
+   not moving a dot on its own map, it is moving the phone's Google Maps.
+   Hidden until then so the page does not promise a link that isn't made yet.
+   ========================================================================= */
+.phone-wrap{width:0;opacity:0;overflow:hidden;flex:none;
+  transition:width .5s cubic-bezier(.4,0,.2,1),opacity .35s ease .15s;
+  display:flex;flex-direction:column;align-items:center;gap:12px}
+.demo-shell.paired .phone-wrap{width:302px;opacity:1}
+.phone-label{font-family:var(--mono);font-size:11.5px;color:var(--fg3);text-align:center;
+  display:flex;align-items:center;gap:7px;white-space:nowrap}
+.phone-label .live{width:6px;height:6px;border-radius:50%;background:var(--green);
+  animation:pulse 2.2s infinite}
+
+.phone{width:290px;height:604px;border-radius:44px;background:#0a0d14;flex:none;
+  border:1px solid #2b3852;padding:11px;position:relative;
+  box-shadow:0 26px 60px -14px rgba(0,0,0,.85),inset 0 0 0 2px #05070d}
+.phone-screen{width:100%;height:100%;border-radius:34px;overflow:hidden;position:relative;
+  background:#e8eaed;display:flex;flex-direction:column}
+/* dynamic island */
+.phone::before{content:"";position:absolute;top:20px;left:50%;transform:translateX(-50%);
+  width:86px;height:25px;border-radius:14px;background:#05070d;z-index:20}
+/* home indicator */
+.phone::after{content:"";position:absolute;bottom:9px;left:50%;transform:translateX(-50%);
+  width:112px;height:4px;border-radius:3px;background:rgba(255,255,255,.32);z-index:20}
+
+/* iOS status bar */
+.ios-bar{height:50px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;
+  padding:0 24px 5px;font-size:12.5px;font-weight:600;color:#202124;z-index:15;
+  font-family:"Segoe UI",system-ui,sans-serif;background:#fff}
+.ios-bar .right{display:flex;align-items:center;gap:4px}
+
+/* Google Maps chrome inside the phone */
+.gm{flex:1;position:relative;overflow:hidden;background:#e8eaed}
+.gm-map{position:absolute;inset:0}
+.gm-search{position:absolute;top:11px;left:11px;right:11px;z-index:12;
+  background:#fff;border-radius:22px;box-shadow:0 2px 8px rgba(0,0,0,.22);
+  display:flex;align-items:center;gap:9px;padding:10px 14px;
+  font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:13px;color:#5f6368}
+.gm-search .g{font-weight:700;font-size:14px;letter-spacing:-.4px}
+.gm-search .g b:nth-child(1){color:#4285f4}.gm-search .g b:nth-child(2){color:#ea4335}
+.gm-search .g b:nth-child(3){color:#fbbc05}.gm-search .g b:nth-child(4){color:#4285f4}
+.gm-search .g b:nth-child(5){color:#34a853}.gm-search .g b:nth-child(6){color:#ea4335}
+.gm-search .q{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* the blue "you are here" puck, Google-Maps style */
+.gm-me{width:20px;height:20px;border-radius:50%;background:#1a73e8;border:3px solid #fff;
+  box-shadow:0 0 0 5px rgba(26,115,232,.22),0 2px 6px rgba(0,0,0,.35)}
+.gm-acc{border-radius:50%;background:rgba(26,115,232,.13);border:1px solid rgba(26,115,232,.3)}
+
+/* bottom card — the place readout Google Maps shows for your location */
+.gm-card{position:absolute;left:11px;right:11px;bottom:14px;z-index:12;background:#fff;
+  border-radius:15px;padding:13px 15px;box-shadow:0 3px 14px rgba(0,0,0,.24);
+  font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+.gm-card .t{font-size:14px;font-weight:600;color:#202124;margin-bottom:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gm-card .c{font-family:var(--mono);font-size:11px;color:#5f6368}
+.gm-card .u{margin-top:7px;font-size:10.5px;color:#1a73e8;display:flex;align-items:center;gap:5px}
+.gm-card .u .d{width:5px;height:5px;border-radius:50%;background:#1a73e8}
+/* flashes when a new location lands, so the causal link is unmissable */
+@keyframes gmflash{0%{background:#e8f0fe}100%{background:#fff}}
+.gm-card.upd{animation:gmflash .7s ease}
+
+/* the "waiting for connection" state */
+.phone-idle{position:absolute;inset:0;z-index:14;background:#f1f3f4;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;gap:11px;padding:30px;
+  text-align:center;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  font-size:12.5px;color:#5f6368;transition:opacity .4s}
+.phone-idle.gone{opacity:0;pointer-events:none}
 /* map overlay bits */
 .dlayers{position:absolute;left:12px;bottom:12px;z-index:600;display:flex;gap:6px}
 .dlayer{padding:6px 11px;border-radius:8px;background:rgba(255,255,255,.94);border:1px solid #dadce0;
@@ -341,6 +419,14 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
 .foot-in a:hover{color:var(--fg)}
 
 /* ---------- responsive ---------- */
+/* Below ~1180px there is no room for window + phone side by side, so the pair
+   stacks and the phone sits under the app instead of being crushed next to it. */
+@media(max-width:1180px){
+  .demo-shell,.demo-shell.paired{flex-direction:column;align-items:center;max-width:1120px}
+  .demo-shell .window{width:100%}
+  .demo-shell.paired .phone-wrap{width:302px}
+  .phone-wrap{transition:opacity .35s ease}
+}
 @media(max-width:900px){
   .nav-links{display:none}
   .appbody{flex-direction:column;height:auto}
@@ -421,14 +507,14 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
 
 <!-- ======================= LIVE DEMO ======================= -->
 <section id="demo" style="padding-top:26px">
-  <div class="wrap">
+  <div class="wrap wide">
     <div class="demo-hint">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
-      <span class="zh">这是真的能点的 —— 先按 <b>连接</b>，然后点地图、拖摇杆、按 WASD 试试</span>
-      <span class="en">This one actually works — hit <b>Connect</b>, then click the map, drag the joystick, press WASD</span>
+      <span class="zh">这是真的能点的 —— 先按 <b>连接</b>，右边会出现手机，然后点地图试试</span>
+      <span class="en">This one actually works — hit <b>Connect</b>, a phone appears, then click the map</span>
     </div>
 
-    <div class="demo-shell">
+    <div class="demo-shell" id="dDemoShell">
       <div class="window">
         <div class="titlebar">
           <div class="lights"><i></i><i></i><i></i></div>
@@ -548,6 +634,59 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
               <button class="dlayer" data-layer="satellite"><span class="zh">卫星</span><span class="en">Satellite</span></button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ---------- the phone: mirrors the spoofed location live ---------- -->
+      <div class="phone-wrap" id="dPhoneWrap" aria-hidden="true">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="ios-bar">
+              <span id="dPhoneClock">9:41</span>
+              <span class="right">
+                <svg width="16" height="11" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".6"/><rect x="4.5" y="5.5" width="3" height="6.5" rx=".6"/><rect x="9" y="3" width="3" height="9" rx=".6"/><rect x="13.5" y="0" width="3" height="12" rx=".6"/></svg>
+                <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><path d="M8 10.5l1.8-2.1a2.4 2.4 0 0 0-3.6 0L8 10.5zM4.4 6.3l1.2 1.4a3.9 3.9 0 0 1 4.8 0l1.2-1.4a5.7 5.7 0 0 0-7.2 0zM1.3 2.7l1.2 1.4a8.6 8.6 0 0 1 11 0l1.2-1.4a10.4 10.4 0 0 0-13.4 0z"/></svg>
+                <svg width="24" height="12" viewBox="0 0 26 12" fill="none"><rect x=".6" y=".6" width="21" height="10.8" rx="3" stroke="currentColor" stroke-opacity=".4"/><rect x="2.2" y="2.2" width="17.8" height="7.6" rx="1.8" fill="currentColor"/><path d="M23.4 4.2v3.6a2 2 0 0 0 0-3.6z" fill="currentColor" fill-opacity=".4"/></svg>
+              </span>
+            </div>
+
+            <div class="gm">
+              <div class="gm-map" id="dPhoneMap"></div>
+
+              <div class="gm-search">
+                <span class="g"><b>G</b><b>o</b><b>o</b><b>g</b><b>l</b><b>e</b></span>
+                <span class="q">
+                  <span class="zh">你的位置</span><span class="en">Your location</span>
+                </span>
+              </div>
+
+              <div class="gm-card" id="dPhoneCard">
+                <div class="t" id="dPhonePlace">
+                  <span class="zh">你的位置</span><span class="en">Your location</span>
+                </div>
+                <div class="c" id="dPhoneCoord">—</div>
+                <div class="u">
+                  <span class="d"></span>
+                  <span class="zh">刚刚更新</span><span class="en">Updated just now</span>
+                </div>
+              </div>
+
+              <!-- shown until AnyLoc connects -->
+              <div class="phone-idle" id="dPhoneIdle">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#9aa0a6" stroke-width="1.6" stroke-linecap="round"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 18h.01"/></svg>
+                <div>
+                  <span class="zh">等待 AnyLoc 连接…</span>
+                  <span class="en">Waiting for AnyLoc…</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="phone-label">
+          <span class="live"></span>
+          <span class="zh">iPhone 上的 Google 地图 · 实时</span>
+          <span class="en">Google Maps on the iPhone · live</span>
         </div>
       </div>
     </div>
@@ -859,6 +998,25 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
   var marker = L.marker(START, { icon: meIcon, interactive: false }).addTo(map);
   var routeLine = null;
 
+  /* ---- the phone's Google Maps ----------------------------------------
+     A second, independent Leaflet map. It is deliberately NOT a clone of the
+     desktop view: it stays locked at street zoom and always re-centres on the
+     puck, because that is what Maps does on a real phone — it follows you.
+     Interaction is disabled outright; the phone is a readout, and letting a
+     visitor pan it would imply they are driving the phone rather than AnyLoc. */
+  var pMap = L.map($("dPhoneMap"), {
+    zoomControl: false, attributionControl: false,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+    boxZoom: false, keyboard: false, touchZoom: false, tap: false
+  }).setView(START, 16);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+    { maxZoom: 19 }).addTo(pMap);
+
+  var pMeIcon = L.divIcon({ className: "", html: '<div class="gm-me"></div>', iconSize: [20,20], iconAnchor: [10,10] });
+  var pMarker = L.marker(START, { icon: pMeIcon, interactive: false }).addTo(pMap);
+  var pAccuracy = L.circle(START, { radius: 38, color: "#1a73e8", weight: 1,
+    opacity: .3, fillColor: "#1a73e8", fillOpacity: .12, interactive: false }).addTo(pMap);
+
   // ---- toast (stands in for the app's inline notices) ----
   var toastT = null;
   function toast(zh, en){
@@ -882,6 +1040,37 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
     pos.lat = lat; pos.lon = lon;
     marker.setLatLng([lat, lon]);
     paintCoord();
+    pushToPhone(lat, lon);
+  }
+
+  /* Everything that moves the location funnels through setMarker, so mirroring
+     the phone here means the phone follows a map click, the joystick, WASD and
+     route-walking alike — with no per-caller wiring to forget. */
+  var lastPhonePaint = 0;
+  function pushToPhone(lat, lon){
+    if (!connected) return;
+    pMarker.setLatLng([lat, lon]);
+    pAccuracy.setLatLng([lat, lon]);
+    pMap.setView([lat, lon], pMap.getZoom(), { animate: false });
+
+    // The coordinate readout is throttled: joystick movement fires this ~60×/s
+    // and repainting text that fast is both unreadable and needless layout work.
+    var now = performance.now();
+    if (now - lastPhonePaint < 120) return;
+    lastPhonePaint = now;
+    $("dPhoneCoord").textContent = fmt(lat) + ", " + fmt(lon);
+  }
+
+  // Flash the card + name the place — only for discrete jumps (click, chip,
+  // search), where there is a real "new place" moment worth announcing.
+  function announceOnPhone(zh, en){
+    if (!connected) return;
+    var place = $("dPhonePlace");
+    place.innerHTML = '<span class="zh">' + zh + '</span><span class="en">' + en + '</span>';
+    var card = $("dPhoneCard");
+    card.classList.remove("upd");
+    void card.offsetWidth;              // restart the animation
+    card.classList.add("upd");
   }
 
   // ---- connect state machine (mirrors the real device flow) ----
@@ -919,7 +1108,19 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
       $("dConnect").disabled = true;
       $("dReset").disabled = false;
       paintCoord();
-      toast("已连接 —— 点地图试试", "Connected — try clicking the map");
+
+      // bring the phone in: the shell widens, the window yields the space
+      $("dDemoShell").classList.add("paired");
+      $("dPhoneWrap").setAttribute("aria-hidden", "false");
+      setTimeout(function(){
+        $("dPhoneIdle").classList.add("gone");
+        pMap.invalidateSize();            // it was 0-width while hidden
+        pushToPhone(pos.lat, pos.lon);
+        announceOnPhone("苹果总部", "Apple Park");
+      }, 520);                            // after the width transition settles
+
+      toast("已连接 —— 点地图，右边手机会跟着动",
+            "Connected — click the map and watch the phone follow");
     }, 2300);
   });
 
@@ -938,6 +1139,16 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
     marker.setLatLng(START);
     map.setView(START, 15, { animate: true });
     paintCoord();
+
+    // the phone goes away with the connection — the link is gone, so the
+    // page should stop implying one exists
+    $("dPhoneIdle").classList.remove("gone");
+    $("dPhoneCoord").textContent = "—";
+    $("dDemoShell").classList.remove("paired");
+    $("dPhoneWrap").setAttribute("aria-hidden", "true");
+    pMarker.setLatLng(START); pAccuracy.setLatLng(START);
+    pMap.setView(START, 16, { animate: false });
+
     toast("已恢复真实 GPS", "Real GPS restored");
   });
 
@@ -957,6 +1168,7 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
     if (needConnect()) return;
     if (mode === "route") { addWaypoint(e.latlng.lat, e.latlng.lng); return; }
     setMarker(e.latlng.lat, e.latlng.lng);
+    announceOnPhone("地图上的位置", "Dropped pin");
     toast("定位已更新", "Location updated");
   });
 
@@ -979,6 +1191,7 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
       if (needConnect()) return;
       setMarker(p.lat, p.lon);
       map.setView([p.lat, p.lon], 15, { animate: true });
+      announceOnPhone(p.zh, p.en);
       toast("已前往 " + p.zh, "Moved to " + p.en);
     });
     chips.appendChild(b);
@@ -994,6 +1207,7 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
       var la = parseFloat(m[1]), lo = parseFloat(m[2]);
       if (la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
         setMarker(la, lo); map.setView([la, lo], 15, { animate: true });
+        announceOnPhone("坐标位置", "Coordinates");
         toast("已前往坐标", "Moved to coordinates");
         this.value = ""; return;
       }
@@ -1004,6 +1218,7 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
     })[0];
     if (hit) {
       setMarker(hit.lat, hit.lon); map.setView([hit.lat, hit.lon], 15, { animate: true });
+      announceOnPhone(hit.zh, hit.en);
       toast("已前往 " + hit.zh, "Moved to " + hit.en);
       this.value = "";
     } else {
@@ -1057,10 +1272,15 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
   var keys = {};
   var demoVisible = false;
   if ("IntersectionObserver" in window) {
+    /* Observe the MAP, not the whole window. The window is now ~725px tall, so
+       on a laptop viewport it may never reach a 25%-of-itself ratio and the gate
+       would latch shut forever, silently killing WASD. Watching the map — the
+       thing you actually steer — and using rootMargin instead of a ratio keeps
+       this correct at any window height. */
     new IntersectionObserver(function(es){
       demoVisible = es[0].isIntersecting;
       if (!demoVisible) { keys = {}; if (!joyActive) { dir.x = dir.y = 0; setNub(0,0); } }
-    }, { threshold: .25 }).observe($("dMap").closest(".window"));
+    }, { rootMargin: "-60px 0px -60px 0px", threshold: 0 }).observe($("dMap"));
   } else { demoVisible = true; }
 
   window.addEventListener("keydown", function(e){
@@ -1095,6 +1315,10 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
     var now = performance.now();
     var dt = (now - lastTick) / 1000;
     lastTick = now;
+    // rAF is throttled (or stopped) while the tab is hidden, so dt can come
+    // back as many seconds. Without a clamp the marker teleports across the
+    // map the instant you switch back to the tab.
+    if (dt > 0.1) dt = 0.1;
     if (connected && mode === "free") {
       var mag = Math.hypot(dir.x, dir.y);
       if (mag > 0.02) {
@@ -1222,11 +1446,24 @@ footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index
     return 2*R*Math.asin(Math.sqrt(h));
   }
 
+  // ---- route mode announcements + phone clock ----
+  // A real phone shows the real time; a frozen 9:41 is the one detail that
+  // gives a mock-up away at a glance.
+  function paintClock(){
+    var d = new Date();
+    $("dPhoneClock").textContent = d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+  paintClock();
+  setInterval(paintClock, 20000);
+
   // ---- initial paint ----
   paintCoord();
   paintWaypoints();
   setTimeout(function(){ map.invalidateSize(); }, 200);
-  window.addEventListener("resize", function(){ map.invalidateSize(); });
+  window.addEventListener("resize", function(){
+    map.invalidateSize();
+    if (connected) pMap.invalidateSize();
+  });
 })();
 </script>
 </body>
