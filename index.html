@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AnyLoc — 把手机定位挪到地图上任何一点</title>
+<meta name="description" content="AnyLoc 是一个本地运行的 iOS / Android 定位模拟器，支持 Windows 与 macOS。点地图即可传送，摇杆或 WASD 自由行走，沿真实道路自动导航。全部在你自己的电脑上运行。" />
+<link rel="icon" href="icon-256.png" />
+
+<!-- Leaflet is vendored (same files the app ships) so the live demo keeps
+     working even if a CDN is blocked. Tiles still need the network. -->
+<link rel="stylesheet" href="vendor/leaflet.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================================
+   AnyLoc product page — design tokens
+   The page canvas is deliberately DARK while the embedded demo renders the
+   real app UI in its own light theme. That contrast is the point: the demo
+   should read as a real application window sitting on the page, not as a
+   page section that happens to have a map in it.
+   ========================================================================= */
+:root{
+  --ink:#05070d;            /* page canvas */
+  --ink2:#0b0f1a;           /* raised surface */
+  --ink3:#121826;           /* card */
+  --line:#1e2739;
+  --line2:#2b3852;
+  --fg:#eef2f9;
+  --fg2:#aeb9cd;
+  --fg3:#6f7d96;
+
+  --blue:#4d8dff;           /* the app's #1a73e8, lifted for dark bg */
+  --blueDeep:#1a73e8;
+  --blueGlow:rgba(77,141,255,.16);
+  --green:#3ddc91;          /* "connected" — same semantic as the app */
+  --greenGlow:rgba(61,220,145,.14);
+  --amber:#ffc24b;
+  --red:#ff6b5e;
+
+  --display:"Space Grotesk","Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  --body:"Space Grotesk","Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Code",Consolas,monospace;
+
+  --maxw:1180px;
+  --r:16px;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--ink);color:var(--fg);font-family:var(--body);
+  -webkit-font-smoothing:antialiased;line-height:1.6;overflow-x:hidden;
+}
+a{color:inherit;text-decoration:none}
+h1,h2,h3{margin:0;font-weight:700;letter-spacing:-.03em;line-height:1.1}
+p{margin:0}
+
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.mono{font-family:var(--mono)}
+
+/* hide the language that isn't active */
+[data-lang="zh"] .en{display:none}
+[data-lang="en"] .zh{display:none}
+
+/* ---------- ambient glow ---------- */
+.glow{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.glow::before{
+  content:"";position:absolute;top:-30%;left:50%;transform:translateX(-50%);
+  width:1100px;height:800px;border-radius:50%;
+  background:radial-gradient(circle,var(--blueGlow),transparent 62%);
+  filter:blur(30px);
+}
+
+/* ---------- nav ---------- */
+nav{
+  position:sticky;top:0;z-index:900;backdrop-filter:blur(14px);
+  background:rgba(5,7,13,.78);border-bottom:1px solid var(--line);
+}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:13px 24px;
+  display:flex;align-items:center;gap:22px}
+.logo{display:flex;align-items:center;gap:10px;font-family:var(--display);
+  font-weight:700;font-size:18px;letter-spacing:-.03em}
+.logo img{width:26px;height:26px;border-radius:7px}
+.logo span{color:var(--blue)}
+.nav-links{display:flex;gap:24px;margin-left:14px;font-size:14px;color:var(--fg2)}
+.nav-links a:hover{color:var(--fg)}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+
+.btn{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:10px;
+  font-size:14px;font-weight:600;font-family:var(--body);cursor:pointer;
+  border:1px solid var(--line2);background:transparent;color:var(--fg);
+  transition:.15s;white-space:nowrap}
+.btn:hover{background:var(--ink3);border-color:var(--fg3)}
+.btn.primary{background:var(--blue);border-color:var(--blue);color:#04101f}
+.btn.primary:hover{background:#6ba0ff;border-color:#6ba0ff}
+.btn.sm{padding:7px 12px;font-size:13px}
+.btn.ghost{border-color:transparent;color:var(--fg2)}
+.btn.ghost:hover{color:var(--fg);background:var(--ink3)}
+
+/* ---------- hero ---------- */
+header.hero{position:relative;z-index:1;padding:78px 0 42px;text-align:center}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;
+  border:1px solid var(--line2);background:var(--ink2);font-size:12.5px;color:var(--fg2);
+  margin-bottom:26px;font-family:var(--mono)}
+.badge .pulse{width:7px;height:7px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 0 0 var(--greenGlow);animation:pulse 2.2s infinite}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(61,220,145,.5)}
+  70%{box-shadow:0 0 0 9px rgba(61,220,145,0)}
+  100%{box-shadow:0 0 0 0 rgba(61,220,145,0)}
+}
+h1.big{font-size:clamp(38px,6.4vw,70px);letter-spacing:-.045em;margin-bottom:20px}
+h1.big em{font-style:normal;background:linear-gradient(100deg,var(--blue),var(--green));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{font-size:clamp(15px,1.9vw,19px);color:var(--fg2);max-width:610px;margin:0 auto 30px}
+.hero-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:16px}
+.platforms{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;
+  font-size:12.5px;color:var(--fg3);font-family:var(--mono)}
+.platforms span{display:inline-flex;align-items:center;gap:6px}
+
+/* ---------- section chrome ---------- */
+section{position:relative;z-index:1;padding:76px 0}
+.sec-head{text-align:center;max-width:660px;margin:0 auto 44px}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--blue);margin-bottom:14px}
+.sec-head h2{font-size:clamp(27px,3.7vw,42px);margin-bottom:14px}
+.sec-head p{color:var(--fg2);font-size:16px}
+
+/* ============================================================================
+   THE DEMO — a real, working miniature of the AnyLoc window.
+   Chrome (traffic lights + title bar) is what sells it as an app rather than
+   a widget, so it is drawn faithfully rather than suggested.
+   ========================================================================= */
+.demo-shell{max-width:1120px;margin:0 auto;position:relative}
+.demo-hint{display:flex;align-items:center;justify-content:center;gap:9px;
+  font-size:13px;color:var(--fg3);margin-bottom:14px;font-family:var(--mono)}
+.demo-hint b{color:var(--green);font-weight:500}
+
+.window{
+  border-radius:var(--r);overflow:hidden;border:1px solid var(--line2);
+  background:#fff;box-shadow:0 30px 70px -18px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.05);
+}
+.titlebar{display:flex;align-items:center;gap:9px;padding:11px 15px;
+  background:#e9ecf1;border-bottom:1px solid #d5dae2}
+.lights{display:flex;gap:7px}
+.lights i{width:11px;height:11px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#ff5f57}
+.lights i:nth-child(2){background:#febc2e}
+.lights i:nth-child(3){background:#28c840}
+.titlebar .t{flex:1;text-align:center;font-size:12.5px;color:#5f6b7f;font-weight:500;
+  margin-right:52px}
+
+/* the app body: panel + map, mirroring the real 360px sidebar */
+.appbody{display:flex;height:560px;background:#fff;color:#202124}
+.dpanel{width:330px;min-width:330px;border-right:1px solid #e3e5e8;padding:17px;
+  overflow-y:auto;display:flex;flex-direction:column;gap:15px;
+  font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+.dpanel::-webkit-scrollbar{width:7px}
+.dpanel::-webkit-scrollbar-thumb{background:#dadce0;border-radius:4px}
+.dmap{flex:1;background:#e8eaed;position:relative}
+
+.dhead{display:flex;align-items:center;justify-content:space-between}
+.dhead h3{font-size:17px;display:flex;align-items:center;gap:7px;color:#202124}
+.dhead h3 .dot{width:9px;height:9px;border-radius:50%;background:#9aa0a6;transition:.3s}
+.dhead h3 .dot.on{background:#1e8e3e;box-shadow:0 0 0 3px rgba(30,142,62,.16)}
+.dhead h3 .dot.busy{background:#e37400;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.35}}
+.dhead h3 b span{color:#1a73e8}
+
+.dcard{border-top:1px solid #e3e5e8;padding-top:14px}
+.dcard:first-of-type{border-top:none;padding-top:0}
+.dcard h4{font-size:12px;font-weight:600;color:#202124;margin:0 0 9px;
+  display:flex;justify-content:space-between;align-items:center}
+.dcard h4 .co{font-family:var(--mono);font-size:11px;color:#5f6368;font-weight:400}
+
+.dstatus{font-size:12.5px;color:#5f6368;line-height:1.5;min-height:2.6em}
+.dstatus b{color:#202124}
+.dbanner{margin-top:8px;padding:9px 11px;border-radius:9px;font-size:12px;
+  line-height:1.5;display:none}
+.dbanner.show{display:block}
+.dbanner.trust{background:#fef7e0;color:#b06000;font-weight:600}
+.dbanner.ok{background:#e6f4ea;color:#188038;font-weight:600}
+.dbanner.info{background:#e8f0fe;color:#1967d2}
+
+.drow{display:flex;gap:9px;margin-top:9px}
+.drow>*{flex:1}
+.dbtn{font-family:inherit;font-size:13px;font-weight:500;padding:9px 11px;border-radius:9px;
+  border:1px solid #dadce0;background:#fff;color:#3c4043;cursor:pointer;transition:.12s;
+  box-shadow:0 1px 2px rgba(60,64,67,.2)}
+.dbtn:hover{background:#f8f9fa}
+.dbtn:active{transform:translateY(.5px)}
+.dbtn:disabled{opacity:.45;cursor:not-allowed}
+.dbtn.primary{background:#e8f0fe;border-color:#1a73e8;color:#1967d2;font-weight:600}
+.dbtn.danger{color:#c5221f}
+.dbtn.danger:hover{background:#fce8e6;border-color:#d93025}
+
+.dsearch{position:relative}
+.dsearch input{width:100%;padding:10px 12px 10px 36px;border-radius:22px;border:1px solid transparent;
+  background:#f8f9fa;font-size:13px;font-family:inherit;color:#202124;outline:none;
+  box-shadow:0 1px 2px rgba(60,64,67,.2)}
+.dsearch input:focus{background:#fff;border-color:#1a73e8;box-shadow:0 0 0 3px #e8f0fe}
+.dsearch svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#80868b}
+.dchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.dchip{padding:5px 11px;border-radius:20px;border:1px solid #e3e5e8;background:#f8f9fa;
+  font-size:12px;cursor:pointer;color:#3c4043;transition:.12s}
+.dchip:hover{background:#e8f0fe;border-color:#1a73e8;color:#1967d2}
+
+.dtabs{display:flex;border-bottom:1px solid #e3e5e8;margin-bottom:12px}
+.dtabs button{flex:1;background:none;border:none;border-bottom:2.5px solid transparent;
+  padding:9px 6px;font-size:13px;font-weight:600;color:#5f6368;cursor:pointer;
+  margin-bottom:-1px;font-family:inherit}
+.dtabs button.on{color:#1967d2;border-bottom-color:#1a73e8}
+
+.dspeeds{display:flex;gap:6px}
+.dspeeds button{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:8px 3px 6px;font-size:11px;color:#5f6368;background:#fff;border:1px solid #dadce0;
+  border-radius:10px;cursor:pointer;font-family:inherit;font-weight:500;transition:.12s}
+.dspeeds button:hover{background:#f8f9fa}
+.dspeeds button.on{background:#e8f0fe;border-color:#1a73e8;color:#1967d2;font-weight:600}
+.dspeeds button.on svg{color:#1a73e8}
+.dspeeds svg{color:#80868b}
+
+.dlabel{font-size:11px;color:#5f6368;margin:12px 0 5px;font-weight:500}
+
+#djoyWrap{display:flex;flex-direction:column;align-items:center;gap:9px;margin-top:14px}
+#djoy{width:132px;height:132px;border-radius:50%;background:#f8f9fa;border:1px solid #e3e5e8;
+  position:relative;touch-action:none;user-select:none;cursor:grab}
+#djoy:active{cursor:grabbing}
+#djoyNub{width:50px;height:50px;border-radius:50%;position:absolute;left:41px;top:41px;
+  background:#e8f0fe;border:1.5px solid #1a73e8;box-shadow:0 1px 2px rgba(60,64,67,.2);
+  transition:transform .05s}
+.dhint{font-size:11.5px;color:#5f6368;text-align:center;line-height:1.7}
+.dhint kbd{background:#f1f3f4;border:1px solid #dadce0;border-bottom-width:2px;border-radius:4px;
+  padding:1px 5px;font-size:10.5px;font-family:var(--mono);color:#3c4043}
+
+.dwp{list-style:none;margin:9px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
+.dwp li{display:flex;align-items:center;gap:8px;background:#f8f9fa;border:1px solid #e3e5e8;
+  border-radius:8px;padding:7px 9px;font-size:11.5px}
+.dwp li.empty{justify-content:center;color:#5f6368}
+.dwp .b{width:20px;height:20px;border-radius:50%;background:#1a73e8;color:#fff;font-size:10.5px;
+  font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+.dwp .c{flex:1;color:#5f6368;font-family:var(--mono);font-size:11px}
+.dwp .x{color:#80868b;cursor:pointer;font-size:15px;line-height:1}
+.dwp .x:hover{color:#c5221f}
+.dprog{height:5px;background:#f1f3f4;border-radius:3px;overflow:hidden;margin-top:9px;display:none}
+.dprog.show{display:block}
+.dprog>div{height:100%;width:0;background:#1a73e8;transition:width .12s}
+
+.dpill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.dpill.idle{background:#f1f3f4;color:#5f6368}
+.dpill.connecting{background:#fef7e0;color:#b06000}
+.dpill.connected{background:#e6f4ea;color:#188038}
+.dcoord{font-family:var(--mono);font-size:13px;color:#3c4043}
+
+/* map overlay bits */
+.dlayers{position:absolute;left:12px;bottom:12px;z-index:600;display:flex;gap:6px}
+.dlayer{padding:6px 11px;border-radius:8px;background:rgba(255,255,255,.94);border:1px solid #dadce0;
+  font-size:11.5px;cursor:pointer;color:#3c4043;font-weight:500;box-shadow:0 2px 6px rgba(0,0,0,.18);
+  font-family:"Segoe UI",system-ui,sans-serif}
+.dlayer:hover{background:#fff}
+.dlayer.on{background:#e8f0fe;border-color:#1a73e8;color:#1967d2;font-weight:600}
+.dtoast{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:700;
+  background:rgba(32,33,36,.9);color:#fff;padding:8px 15px;border-radius:20px;font-size:12.5px;
+  font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}
+.dtoast.show{opacity:1}
+.me-dot{width:17px;height:17px;border-radius:50%;background:#1a73e8;border:2.5px solid #fff;
+  box-shadow:0 0 0 4px rgba(26,115,232,.25),0 2px 6px rgba(0,0,0,.3)}
+.wp-pin{width:25px;height:25px;border-radius:50% 50% 50% 0;background:#1a73e8;transform:rotate(-45deg);
+  border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 6px rgba(0,0,0,.35)}
+.wp-pin span{transform:rotate(45deg);color:#fff;font-weight:700;font-size:11.5px}
+.leaflet-container{background:#e8eaed;font-family:"Segoe UI",system-ui,sans-serif}
+
+/* ---------- feature grid ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));gap:18px}
+.card{background:var(--ink3);border:1px solid var(--line);border-radius:var(--r);padding:26px;
+  transition:.2s}
+.card:hover{border-color:var(--line2);transform:translateY(-2px)}
+.card .ic{width:38px;height:38px;border-radius:10px;background:var(--blueGlow);
+  display:flex;align-items:center;justify-content:center;color:var(--blue);margin-bottom:15px}
+.card h3{font-size:17px;margin-bottom:8px}
+.card p{color:var(--fg2);font-size:14.2px}
+
+/* ---------- steps ---------- */
+.steps-tabs{display:flex;gap:8px;justify-content:center;margin-bottom:30px}
+.steps-tabs button{padding:9px 20px;border-radius:10px;border:1px solid var(--line2);
+  background:transparent;color:var(--fg2);font-size:14px;font-weight:600;cursor:pointer;
+  font-family:var(--body);transition:.15s}
+.steps-tabs button.on{background:var(--blue);border-color:var(--blue);color:#04101f}
+.steps{display:none;counter-reset:s;max-width:760px;margin:0 auto}
+.steps.on{display:block}
+.step{display:flex;gap:18px;padding-bottom:26px;position:relative}
+.step:not(:last-child)::after{content:"";position:absolute;left:17px;top:40px;bottom:6px;
+  width:1px;background:var(--line2)}
+.step .n{width:35px;height:35px;flex:none;border-radius:50%;background:var(--ink3);
+  border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:14px;color:var(--blue);font-weight:700;z-index:1}
+.step h4{font-size:16px;margin:5px 0 5px;font-weight:600}
+.step p{color:var(--fg2);font-size:14.2px}
+.step code{font-family:var(--mono);font-size:12.5px;background:var(--ink2);
+  border:1px solid var(--line);border-radius:5px;padding:1.5px 6px;color:var(--blue)}
+
+/* ---------- comparison table ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:14.2px;
+  background:var(--ink3);border-radius:var(--r);overflow:hidden;
+  border:1px solid var(--line)}
+.tbl th,.tbl td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--line)}
+.tbl thead th{background:var(--ink2);font-size:13px;color:var(--fg);font-weight:600}
+.tbl tbody th{color:var(--fg2);font-weight:500;width:32%}
+.tbl td{color:var(--fg2)}
+.tbl tr:last-child th,.tbl tr:last-child td{border-bottom:none}
+.tbl b{color:var(--fg);font-weight:600}
+.tbl .yes{color:var(--green)}
+
+/* ---------- notice ---------- */
+.notice{background:linear-gradient(180deg,rgba(255,194,75,.07),transparent);
+  border:1px solid rgba(255,194,75,.28);border-radius:var(--r);padding:26px 28px;
+  display:flex;gap:17px;align-items:flex-start;max-width:820px;margin:0 auto}
+.notice .ic{color:var(--amber);flex:none;margin-top:2px}
+.notice h3{font-size:16px;margin-bottom:8px;color:var(--amber)}
+.notice p{color:var(--fg2);font-size:14.2px}
+
+/* ---------- download ---------- */
+.dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:18px;
+  max-width:830px;margin:0 auto}
+.dlcard{background:var(--ink3);border:1px solid var(--line);border-radius:var(--r);
+  padding:30px;text-align:center;transition:.2s}
+.dlcard:hover{border-color:var(--blue)}
+.dlcard .os{font-size:19px;font-weight:700;margin-bottom:6px}
+.dlcard .meta{font-family:var(--mono);font-size:12.2px;color:var(--fg3);margin-bottom:19px}
+.dlcard .btn{width:100%;justify-content:center}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--line);padding:38px 0;position:relative;z-index:1;margin-top:30px}
+.foot-in{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;
+  font-size:13px;color:var(--fg3)}
+.foot-in a:hover{color:var(--fg)}
+
+/* ---------- responsive ---------- */
+@media(max-width:900px){
+  .nav-links{display:none}
+  .appbody{flex-direction:column;height:auto}
+  .dpanel{width:100%;min-width:0;border-right:none;border-bottom:1px solid #e3e5e8;
+    max-height:none;overflow:visible}
+  .dmap{flex:none;height:340px}
+  .demo-hint{display:none}
+}
+@media(max-width:520px){
+  header.hero{padding:52px 0 32px}
+  section{padding:54px 0}
+  .hero-cta{flex-direction:column}
+  .hero-cta .btn{width:100%;justify-content:center}
+}
+</style>
+</head>
+<body>
+<div class="glow"></div>
+
+<!-- ======================= NAV ======================= -->
+<nav>
+  <div class="nav-in">
+    <a href="#top" class="logo">
+      <img src="icon-256.png" alt="AnyLoc" />
+      Any<span>Loc</span>
+    </a>
+    <div class="nav-links">
+      <a href="#demo"><span class="zh">在线体验</span><span class="en">Live demo</span></a>
+      <a href="#features"><span class="zh">功能</span><span class="en">Features</span></a>
+      <a href="#how"><span class="zh">怎么用</span><span class="en">How it works</span></a>
+      <a href="#download"><span class="zh">下载</span><span class="en">Download</span></a>
+    </div>
+    <div class="nav-right">
+      <button class="btn ghost sm" id="langBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/></svg>
+        <span id="langLabel">EN</span>
+      </button>
+      <a class="btn sm" href="https://github.com/xjin6/any-loc" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a class="btn primary sm" href="#download">
+        <span class="zh">下载</span><span class="en">Download</span>
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- ======================= HERO ======================= -->
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="badge"><span class="pulse"></span> v1.1.0 · Windows &amp; macOS · iOS &amp; Android</div>
+    <h1 class="big">
+      <span class="zh">把手机定位<br/>挪到地图上<em>任何一点</em></span>
+      <span class="en">Put your phone<br/><em>anywhere</em> on the map</span>
+    </h1>
+    <p class="sub">
+      <span class="zh">点一下地图就传送，拖摇杆就走路。AnyLoc 在你自己的电脑上运行，通过数据线直接跟手机对话 —— 不越狱、不装 App、不上传任何数据。</span>
+      <span class="en">Click the map to teleport. Drag the joystick to walk. AnyLoc runs entirely on your own machine and talks to your phone over USB — no jailbreak, no app to install, nothing uploaded anywhere.</span>
+    </p>
+    <div class="hero-cta">
+      <a class="btn primary" href="#demo">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg>
+        <span class="zh">先在线试一下</span><span class="en">Try it live</span>
+      </a>
+      <a class="btn" href="#download">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        <span class="zh">下载应用</span><span class="en">Download the app</span>
+      </a>
+    </div>
+    <div class="platforms">
+      <span>◆ <span class="zh">单个 exe，双击即用</span><span class="en">One .exe, double-click</span></span>
+      <span>◆ <span class="zh">iOS 17 免 root</span><span class="en">iOS 17 needs no root</span></span>
+      <span>◆ <span class="zh">Android 免 root 免装 App</span><span class="en">Android: no root, no app</span></span>
+    </div>
+  </div>
+</header>
+
+<!-- ======================= LIVE DEMO ======================= -->
+<section id="demo" style="padding-top:26px">
+  <div class="wrap">
+    <div class="demo-hint">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
+      <span class="zh">这是真的能点的 —— 先按 <b>连接</b>，然后点地图、拖摇杆、按 WASD 试试</span>
+      <span class="en">This one actually works — hit <b>Connect</b>, then click the map, drag the joystick, press WASD</span>
+    </div>
+
+    <div class="demo-shell">
+      <div class="window">
+        <div class="titlebar">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="t">AnyLoc — <span class="zh">定位模拟</span><span class="en">Location Simulation</span></div>
+        </div>
+
+        <div class="appbody">
+          <!-- ---------- side panel ---------- -->
+          <div class="dpanel">
+            <div class="dhead">
+              <h3><span class="dot" id="dDot"></span> <b>Any<span>Loc</span></b></h3>
+              <span class="dpill idle" id="dPill">idle</span>
+            </div>
+
+            <!-- device -->
+            <div class="dcard">
+              <h4><span class="zh">设备</span><span class="en">Device</span></h4>
+              <div class="dstatus" id="dStatus">
+                <span class="zh">未连接。请用数据线连接手机并解锁，然后点「连接」。</span>
+                <span class="en">Not connected. Plug in your phone, unlock it, then hit Connect.</span>
+              </div>
+              <div class="dbanner" id="dBanner"></div>
+              <div class="drow">
+                <button class="dbtn primary" id="dConnect">
+                  <span class="zh">连接</span><span class="en">Connect</span>
+                </button>
+                <button class="dbtn danger" id="dReset" disabled>
+                  <span class="zh">恢复真实定位</span><span class="en">Reset GPS</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- search -->
+            <div class="dcard">
+              <h4>
+                <span><span class="zh">搜索 / 前往</span><span class="en">Search / go to</span></span>
+              </h4>
+              <div class="dsearch">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                <input type="text" id="dSearch" autocomplete="off"
+                       data-ph-zh="地点名或 纬度, 经度" data-ph-en="Place name, or lat, lon" />
+              </div>
+              <div class="dchips" id="dChips"></div>
+            </div>
+
+            <!-- movement -->
+            <div class="dcard">
+              <h4><span class="zh">移动</span><span class="en">Movement</span></h4>
+              <div class="dtabs">
+                <button class="on" id="dTabFree"><span class="zh">自由移动</span><span class="en">Free move</span></button>
+                <button id="dTabRoute"><span class="zh">路线行走</span><span class="en">Route walk</span></button>
+              </div>
+
+              <div class="dlabel"><span class="zh">速度</span><span class="en">Speed</span></div>
+              <div class="dspeeds" id="dSpeeds">
+                <button data-mps="1.4">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="4" r="2"/><path d="M7 21l3-5 1-4-3-2-2 4M13 11l-2-4 4 1 2 3M11 12l1 4-1 5"/></svg>
+                  <span class="zh">步行</span><span class="en">Walk</span>
+                </button>
+                <button data-mps="4" class="on">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4" r="2"/><path d="M6 20l3-4 3-2-2-4-4 2M12 10l3 2 4-1M12 14l1 6"/></svg>
+                  <span class="zh">跑步</span><span class="en">Run</span>
+                </button>
+                <button data-mps="8.3">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.5" r="3.3"/><circle cx="18.5" cy="17.5" r="3.3"/><path d="M6 17.5l4-8h5l-3 8M14 6h3l1.5 11.5M10 9.5h6"/></svg>
+                  <span class="zh">骑行</span><span class="en">Bike</span>
+                </button>
+                <button data-mps="16.7">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2-5a2 2 0 0 1 1.9-1.3h10.2A2 2 0 0 1 19 8l2 5v5a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M6.5 16h.01M17.5 16h.01M3 13h18"/></svg>
+                  <span class="zh">驾车</span><span class="en">Drive</span>
+                </button>
+              </div>
+
+              <!-- free -->
+              <div id="dFree">
+                <div id="djoyWrap">
+                  <div id="djoy"><div id="djoyNub"></div></div>
+                  <div class="dhint">
+                    <span class="zh">拖动摇杆，或用 <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / 方向键<br/>按住 <kbd>Shift</kbd> = 3× 速度</span>
+                    <span class="en">Drag the stick, or use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows<br/>Hold <kbd>Shift</kbd> for 3× speed</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- route -->
+              <div id="dRoute" style="display:none">
+                <div class="dhint" style="margin-top:10px;text-align:left">
+                  <span class="zh">在地图上依次点击设置途经点（A→B→C…），然后开始行走。</span>
+                  <span class="en">Click the map to drop waypoints (A→B→C…), then start walking.</span>
+                </div>
+                <ul class="dwp" id="dWpList">
+                  <li class="empty"><span class="zh">还没有途经点</span><span class="en">No waypoints yet</span></li>
+                </ul>
+                <div class="dprog" id="dProg"><div></div></div>
+                <div class="drow">
+                  <button class="dbtn primary" id="dWalk" disabled>▶ <span class="zh">开始</span><span class="en">Start</span></button>
+                  <button class="dbtn" id="dClearRoute"><span class="zh">清除</span><span class="en">Clear</span></button>
+                </div>
+              </div>
+            </div>
+
+            <!-- position -->
+            <div class="dcard">
+              <h4><span class="zh">当前模拟位置</span><span class="en">Simulated position</span></h4>
+              <div class="dcoord" id="dCoord">—</div>
+            </div>
+          </div>
+
+          <!-- ---------- map ---------- -->
+          <div class="dmap">
+            <div id="dMap" style="width:100%;height:100%"></div>
+            <div class="dtoast" id="dToast"></div>
+            <div class="dlayers">
+              <button class="dlayer on" data-layer="standard"><span class="zh">标准</span><span class="en">Standard</span></button>
+              <button class="dlayer" data-layer="light"><span class="zh">浅色</span><span class="en">Light</span></button>
+              <button class="dlayer" data-layer="dark"><span class="zh">深色</span><span class="en">Dark</span></button>
+              <button class="dlayer" data-layer="satellite"><span class="zh">卫星</span><span class="en">Satellite</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p style="text-align:center;color:var(--fg3);font-size:12.5px;margin-top:16px">
+      <span class="zh">这是网页版模拟，用来展示界面和手感 —— 真实的 AnyLoc 会把这些坐标写进你插着的那台手机。</span>
+      <span class="en">This is a browser mock-up of the real interface. The actual app writes these coordinates straight to the phone you have plugged in.</span>
+    </p>
+  </div>
+</section>
+
+<!-- ======================= FEATURES ======================= -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow"><span class="zh">功能</span><span class="en">Features</span></div>
+      <h2><span class="zh">一个窗口，两个平台，全都本地</span><span class="en">One window, both platforms, all local</span></h2>
+      <p><span class="zh">同一套 Python 代码同时跑在 Windows 和 macOS 上，插上什么就走哪条路径。</span><span class="en">The same Python runs on Windows and macOS, and auto-detects whatever you plug in.</span></p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></div>
+        <h3><span class="zh">点哪去哪</span><span class="en">Click to teleport</span></h3>
+        <p><span class="zh">在地图上点一下，手机的定位立刻跳过去。搜索地名或直接粘贴一组经纬度也行。</span><span class="en">Click anywhere and the phone's location jumps there instantly. Or search a place name, or paste raw coordinates.</span></p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <h3><span class="zh">摇杆自由行走</span><span class="en">Walk with the joystick</span></h3>
+        <p><span class="zh">拖摇杆或按 WASD／方向键平滑移动，四档速度（步行到驾车），按住 Shift 提速 3 倍。</span><span class="en">Drag the stick or press WASD / arrows for smooth movement. Four speed presets from walking to driving, hold Shift for 3×.</span></p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 20l-5.5 2 2-6.5L18 2l4 4L9 20z"/></svg></div>
+        <h3><span class="zh">沿真实道路自动走</span><span class="en">Auto-walk real roads</span></h3>
+        <p><span class="zh">依次点几个途经点，AnyLoc 用 OSRM 规划真实路线并按选定速度自动行进，可循环。</span><span class="en">Drop a few waypoints and AnyLoc routes them over real roads with OSRM, then walks the path at your chosen speed. Looping supported.</span></p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg></div>
+        <h3><span class="zh">iOS 与 Android 自动识别</span><span class="en">iOS and Android, auto-detected</span></h3>
+        <p><span class="zh">插安卓走 adb（免 root、免装 App、免提权）；插 iPhone 走 Apple 隧道。界面完全一样。</span><span class="en">Android goes over adb — no root, no app, no elevation. iPhone goes over Apple's tunnel. Identical UI either way.</span></p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+        <h3><span class="zh">全程本地，零上传</span><span class="en">Fully local, zero upload</span></h3>
+        <p><span class="zh">没有账号、没有服务器、没有遥测。你的位置只在你的电脑和你的手机之间走。</span><span class="en">No account, no server, no telemetry. Your location never leaves the cable between your computer and your phone.</span></p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/></svg></div>
+        <h3><span class="zh">12 种语言</span><span class="en">12 languages</span></h3>
+        <p><span class="zh">中文、日本語、한국어、English、Deutsch、Español、Français、Bahasa、Português、Русский、ไทย、Tiếng Việt。</span><span class="en">Chinese, Japanese, Korean, English, German, Spanish, French, Indonesian, Portuguese, Russian, Thai and Vietnamese.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= HOW ======================= -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow"><span class="zh">怎么用</span><span class="en">How it works</span></div>
+      <h2><span class="zh">插上线，五步搞定</span><span class="en">Plug in, five steps</span></h2>
+    </div>
+
+    <div class="steps-tabs">
+      <button class="on" id="tabIos">iPhone / iPad</button>
+      <button id="tabAnd">Android</button>
+    </div>
+
+    <div class="steps on" id="stepsIos">
+      <div class="step"><div class="n">1</div><div>
+        <h4><span class="zh">打开「开发者模式」</span><span class="en">Turn on Developer Mode</span></h4>
+        <p><span class="zh">设置 &gt; 隐私与安全性 &gt; 开发者模式 &gt; 打开。手机会重启一次。</span><span class="en">Settings &gt; Privacy &amp; Security &gt; Developer Mode &gt; on. The phone reboots once.</span></p></div></div>
+      <div class="step"><div class="n">2</div><div>
+        <h4><span class="zh">用数据线连接电脑</span><span class="en">Connect over USB</span></h4>
+        <p><span class="zh">直连的 USB 口通常比转接器稳定。Windows 上需要装过 iTunes / Apple Mobile Device Support 才有驱动。</span><span class="en">A direct port beats a hub. On Windows you need iTunes / Apple Mobile Device Support installed for the USB driver.</span></p></div></div>
+      <div class="step"><div class="n">3</div><div>
+        <h4><span class="zh">点「信任这台电脑」</span><span class="en">Tap "Trust This Computer"</span></h4>
+        <p><span class="zh">解锁手机，在弹窗里点「信任」并输入密码。</span><span class="en">Unlock the phone, tap Trust in the prompt, and enter your passcode.</span></p></div></div>
+      <div class="step"><div class="n">4</div><div>
+        <h4><span class="zh">点「连接」</span><span class="en">Hit Connect</span></h4>
+        <p><span class="zh">圆点变绿就表示就绪。首次连接会下载开发者镜像，需要联网，可能要一分钟。</span><span class="en">The dot turns green when it's ready. The first connection downloads a developer image, which needs internet and can take a minute.</span></p></div></div>
+      <div class="step"><div class="n">5</div><div>
+        <h4><span class="zh">点击地图即可改变定位</span><span class="en">Click the map</span></h4>
+        <p><span class="zh">保持窗口开着定位才持续生效；关窗口或点「恢复真实定位」都会还原真实 GPS。</span><span class="en">Keep the window open for the spoof to hold. Closing it — or hitting Reset GPS — restores the real location.</span></p></div></div>
+    </div>
+
+    <div class="steps" id="stepsAnd">
+      <div class="step"><div class="n">1</div><div>
+        <h4><span class="zh">打开「开发者选项」</span><span class="en">Unlock Developer Options</span></h4>
+        <p><span class="zh">设置 &gt; 关于手机 &gt; 连续点击「版本号」7 次。</span><span class="en">Settings &gt; About phone &gt; tap <code>Build number</code> seven times.</span></p></div></div>
+      <div class="step"><div class="n">2</div><div>
+        <h4><span class="zh">打开「USB 调试」</span><span class="en">Enable USB debugging</span></h4>
+        <p><span class="zh">设置 &gt; 系统 &gt; 开发者选项 &gt; USB 调试。小米／华为还需打开「USB 调试（安全设置）」。</span><span class="en">Settings &gt; System &gt; Developer options &gt; USB debugging. Xiaomi and Huawei also need "USB debugging (Security settings)".</span></p></div></div>
+      <div class="step"><div class="n">3</div><div>
+        <h4><span class="zh">用数据线连接电脑</span><span class="en">Connect over USB</span></h4>
+        <p><span class="zh">在手机弹窗里点「允许 USB 调试」，并勾选「一律允许」。</span><span class="en">Tap "Allow USB debugging" on the phone, and tick "Always allow".</span></p></div></div>
+      <div class="step"><div class="n">4</div><div>
+        <h4><span class="zh">点「连接」</span><span class="en">Hit Connect</span></h4>
+        <p><span class="zh">需要 Android 11 或更新的系统。无需 root，无需安装任何 App，也不用管理员权限 —— adb 是随 AnyLoc 一起打包的。</span><span class="en">Needs Android 11 or newer. No root, no app to install, and no admin rights — adb ships bundled inside AnyLoc.</span></p></div></div>
+      <div class="step"><div class="n">5</div><div>
+        <h4><span class="zh">点击地图即可改变定位</span><span class="en">Click the map</span></h4>
+        <p><span class="zh">同样地，关窗口或点「恢复真实定位」就会还原真实 GPS。</span><span class="en">Same as iOS: close the window or hit Reset GPS and the real location comes back.</span></p></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= PLATFORMS ======================= -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow"><span class="zh">平台差异</span><span class="en">Platform notes</span></div>
+      <h2><span class="zh">Windows 与 macOS 的区别</span><span class="en">Windows vs macOS</span></h2>
+      <p><span class="zh">同样的代码、同样的界面。只有这几处不同，而且都是自动处理的。</span><span class="en">Same code, same UI. Only these differ, and all of it is handled for you.</span></p>
+    </div>
+    <table class="tbl">
+      <thead><tr>
+        <th></th><th>Windows</th><th>macOS</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <th><span class="zh">提权</span><span class="en">Elevation</span></th>
+          <td><span class="zh">管理员权限，走 <b>UAC</b> 弹窗</span><span class="en">Administrator via a <b>UAC</b> prompt</span></td>
+          <td><span class="zh"><b class="yes">通常完全不需要</b> —— iOS 17.4+ 用进程内隧道。只有 iOS 17.0–17.3 会要密码</span><span class="en"><b class="yes">Usually none at all</b> — iOS 17.4+ uses an in-process tunnel. Only iOS 17.0–17.3 asks for a password</span></td>
+        </tr>
+        <tr>
+          <th><span class="zh">iPhone 的 USB 驱动</span><span class="en">iPhone USB driver</span></th>
+          <td><span class="zh">需要 <b>iTunes / Apple Mobile Device Support</b></span><span class="en">Needs <b>iTunes / Apple Mobile Device Support</b></span></td>
+          <td><span class="zh"><b class="yes">系统自带，什么都不用装</b></span><span class="en"><b class="yes">Built in — nothing to install</b></span></td>
+        </tr>
+        <tr>
+          <th><span class="zh">发布形式</span><span class="en">Ships as</span></th>
+          <td><span class="zh">单个 <b>AnyLoc.exe</b>（约 50 MB）</span><span class="en">A single <b>AnyLoc.exe</b> (~50 MB)</span></td>
+          <td><b>AnyLoc.app</b> + <b>AnyLoc.pkg</b></td>
+        </tr>
+        <tr>
+          <th><span class="zh">看到的窗口</span><span class="en">What you see</span></th>
+          <td><span class="zh">一个应用窗口，<b>没有黑色控制台</b></span><span class="en">One app window, <b>no console box</b></span></td>
+          <td><span class="zh">一个应用窗口 —— 没有终端，也没有浏览器标签页</span><span class="en">One app window — no Terminal, no browser tab</span></td>
+        </tr>
+        <tr>
+          <th><span class="zh">渲染引擎</span><span class="en">Renderer</span></th>
+          <td>Edge <b>WebView2</b></td>
+          <td><span class="zh">系统 <b>WebKit</b>（无需安装）</span><span class="en">System <b>WebKit</b> (nothing to install)</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ======================= NOTICE ======================= -->
+<section style="padding-top:0">
+  <div class="wrap">
+    <div class="notice">
+      <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg></div>
+      <div>
+        <h3><span class="zh">请负责任地使用</span><span class="en">Please use this responsibly</span></h3>
+        <p><span class="zh">AnyLoc 是给开发者和测试人员用的工具 —— 测试基于位置的功能、模拟出行轨迹、调试地理围栏。用它去欺骗别的服务、伪造考勤或违反某个 App 的服务条款，都是你自己的责任。有些服务会检测定位模拟并封号。</span><span class="en">AnyLoc is a tool for developers and testers — exercising location-based features, simulating trips, debugging geofences. Using it to deceive a service, fake attendance, or violate an app's terms of service is on you. Some services do detect location spoofing and will ban accounts for it.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= DOWNLOAD ======================= -->
+<section id="download">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow"><span class="zh">下载</span><span class="en">Download</span></div>
+      <h2><span class="zh">拿去用吧</span><span class="en">Get AnyLoc</span></h2>
+      <p><span class="zh">开源、免费。也可以直接克隆仓库从源码运行。</span><span class="en">Free and open source. You can also clone the repo and run it from source.</span></p>
+    </div>
+
+    <div class="dl">
+      <div class="dlcard">
+        <div class="os">Windows</div>
+        <div class="meta">AnyLoc.exe · ~50 MB · Win 10/11</div>
+        <a class="btn primary" href="https://github.com/xjin6/any-loc/releases" target="_blank" rel="noopener">
+          <span class="zh">下载 .exe</span><span class="en">Download .exe</span>
+        </a>
+      </div>
+      <div class="dlcard">
+        <div class="os">macOS</div>
+        <div class="meta">AnyLoc-1.1.0.pkg · ~49 MB · Apple&nbsp;Silicon / Intel</div>
+        <a class="btn primary" href="https://github.com/xjin6/any-loc/releases" target="_blank" rel="noopener">
+          <span class="zh">下载 .pkg</span><span class="en">Download .pkg</span>
+        </a>
+      </div>
+    </div>
+
+    <p style="text-align:center;margin-top:26px;color:var(--fg3);font-size:13.5px">
+      <span class="zh">从源码运行：</span><span class="en">From source:</span>
+      <code class="mono" style="background:var(--ink3);border:1px solid var(--line);border-radius:6px;padding:3px 9px;margin-left:6px;color:var(--blue)">git clone https://github.com/xjin6/any-loc</code>
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-in">
+    <div>© 2026 AnyLoc · <span class="zh">本地运行的定位模拟器</span><span class="en">A local-first location simulator</span></div>
+    <div style="display:flex;gap:18px">
+      <a href="https://github.com/xjin6/any-loc" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/xjin6/any-loc/releases" target="_blank" rel="noopener"><span class="zh">发布版本</span><span class="en">Releases</span></a>
+      <a href="https://github.com/xjin6/any-loc/issues" target="_blank" rel="noopener"><span class="zh">反馈</span><span class="en">Issues</span></a>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:14px;font-size:11.5px;color:var(--fg3)">
+    <span class="zh">地图数据 © OpenStreetMap 贡献者 · 卫星影像 © Esri</span>
+    <span class="en">Map data © OpenStreetMap contributors · Satellite imagery © Esri</span>
+  </div>
+</footer>
+
+<script src="vendor/leaflet.js"></script>
+<script>
+/* ============================================================================
+   1. LANGUAGE TOGGLE
+   The whole page is bilingual via paired .zh/.en spans; CSS hides the inactive
+   one. Only placeholders (an attribute, not a text node) need JS.
+   ========================================================================= */
+(function(){
+  var html = document.documentElement;
+  var btn = document.getElementById("langBtn");
+  var label = document.getElementById("langLabel");
+
+  function apply(lang){
+    html.setAttribute("data-lang", lang);
+    html.setAttribute("lang", lang === "zh" ? "zh-CN" : "en");
+    // the button offers the OTHER language, which is the convention users expect
+    label.textContent = lang === "zh" ? "EN" : "中文";
+    document.title = lang === "zh"
+      ? "AnyLoc — 把手机定位挪到地图上任何一点"
+      : "AnyLoc — Put your phone anywhere on the map";
+    document.querySelectorAll("[data-ph-zh]").forEach(function(el){
+      el.placeholder = el.getAttribute("data-ph-" + lang) || "";
+    });
+    try { localStorage.setItem("anyloc.site.lang", lang); } catch(e){}
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem("anyloc.site.lang"); } catch(e){}
+  apply(saved || ((navigator.language || "en").toLowerCase().indexOf("zh") === 0 ? "zh" : "en"));
+
+  btn.addEventListener("click", function(){
+    apply(html.getAttribute("data-lang") === "zh" ? "en" : "zh");
+  });
+})();
+
+/* ============================================================================
+   2. PLATFORM TABS (how-it-works)
+   ========================================================================= */
+(function(){
+  var ti = document.getElementById("tabIos"), ta = document.getElementById("tabAnd");
+  var si = document.getElementById("stepsIos"), sa = document.getElementById("stepsAnd");
+  function pick(ios){
+    ti.classList.toggle("on", ios);  ta.classList.toggle("on", !ios);
+    si.classList.toggle("on", ios);  sa.classList.toggle("on", !ios);
+  }
+  ti.addEventListener("click", function(){ pick(true); });
+  ta.addEventListener("click", function(){ pick(false); });
+})();
+
+/* ============================================================================
+   3. THE INTERACTIVE DEMO
+   A faithful miniature of the real app: same start coordinate (Apple Park),
+   same speed presets in m/s, same 111320 m-per-degree movement math, same
+   connect -> trust -> connected state machine. What it does NOT do is talk to
+   a phone; everything below is local state.
+   ========================================================================= */
+(function(){
+  var START = [37.3349, -122.0090];      // same as the app's START
+  var L = window.L;
+  if (!L) { return; }                     // vendored leaflet missing: leave the panel static
+
+  // ---- state ----
+  var connected = false, connecting = false;
+  var pos = { lat: START[0], lon: START[1] };
+  var speedMps = 4;                       // "run", the app's default
+  var mode = "free";
+  var dir = { x: 0, y: 0 }, shiftHeld = false;
+  var waypoints = [], walking = false, walkAbort = false;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var isZh = function(){ return document.documentElement.getAttribute("data-lang") === "zh"; };
+  var fmt = function(n){ return Number(n).toFixed(6); };
+
+  // ---- map ----
+  var map = L.map($("dMap"), { zoomControl: false, attributionControl: false }).setView(START, 15);
+  L.control.zoom({ position: "topright" }).addTo(map);
+
+  var layers = {
+    standard:  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }),
+    light:     L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }),
+    dark:      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }),
+    satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19 })
+  };
+  var curLayer = "standard";
+  layers[curLayer].addTo(map);
+
+  document.querySelectorAll(".dlayer").forEach(function(b){
+    b.addEventListener("click", function(){
+      var id = b.dataset.layer;
+      if (id === curLayer) return;
+      map.removeLayer(layers[curLayer]);
+      layers[id].addTo(map);
+      curLayer = id;
+      document.querySelectorAll(".dlayer").forEach(function(x){ x.classList.toggle("on", x === b); });
+    });
+  });
+
+  var meIcon = L.divIcon({ className: "", html: '<div class="me-dot"></div>', iconSize: [17,17], iconAnchor: [8,8] });
+  var marker = L.marker(START, { icon: meIcon, interactive: false }).addTo(map);
+  var routeLine = null;
+
+  // ---- toast (stands in for the app's inline notices) ----
+  var toastT = null;
+  function toast(zh, en){
+    var el = $("dToast");
+    el.textContent = isZh() ? zh : en;
+    el.classList.add("show");
+    clearTimeout(toastT);
+    toastT = setTimeout(function(){ el.classList.remove("show"); }, 2200);
+  }
+
+  // ---- readouts ----
+  function paintCoord(){
+    $("dCoord").textContent = connected ? (fmt(pos.lat) + ", " + fmt(pos.lon)) : "—";
+  }
+  function setPill(kind, text){
+    var p = $("dPill");
+    p.className = "dpill " + kind;
+    p.textContent = text;
+  }
+  function setMarker(lat, lon){
+    pos.lat = lat; pos.lon = lon;
+    marker.setLatLng([lat, lon]);
+    paintCoord();
+  }
+
+  // ---- connect state machine (mirrors the real device flow) ----
+  function setBanner(cls, zh, en){
+    var b = $("dBanner");
+    if (!cls) { b.className = "dbanner"; b.textContent = ""; return; }
+    b.className = "dbanner show " + cls;
+    b.innerHTML = '<span class="zh">' + zh + '</span><span class="en">' + en + '</span>';
+  }
+  function setStatus(zh, en){
+    $("dStatus").innerHTML = '<span class="zh">' + zh + '</span><span class="en">' + en + '</span>';
+  }
+
+  $("dConnect").addEventListener("click", function(){
+    if (connecting || connected) return;
+    connecting = true;
+    $("dConnect").disabled = true;
+    $("dDot").className = "dot busy";
+    setPill("connecting", "connecting");
+    setStatus("正在通过隧道连接设备…", "Connecting to the device over the tunnel…");
+    setBanner("trust", "请在 iPhone 上点「信任这台电脑」并输入密码",
+                       "Tap “Trust This Computer” on the iPhone and enter your passcode");
+
+    setTimeout(function(){
+      setBanner("info", "正在建立隧道…", "Establishing the tunnel…");
+    }, 1100);
+
+    setTimeout(function(){
+      connecting = false; connected = true;
+      $("dDot").className = "dot on";
+      setPill("connected", "connected");
+      setStatus("已连接 <b>iPhone 15 Pro</b> · iOS 17.5.1", "Connected to <b>iPhone 15 Pro</b> · iOS 17.5.1");
+      setBanner("ok", "设备已就绪 ✓ 现在点地图就能改变定位",
+                      "Device ready ✓ Click the map to move the location");
+      $("dConnect").disabled = true;
+      $("dReset").disabled = false;
+      paintCoord();
+      toast("已连接 —— 点地图试试", "Connected — try clicking the map");
+    }, 2300);
+  });
+
+  $("dReset").addEventListener("click", function(){
+    connected = false; walking = false; walkAbort = true;
+    dir.x = dir.y = 0; setNub(0,0);
+    $("dDot").className = "dot";
+    setPill("idle", "idle");
+    setStatus("未连接。请用数据线连接手机并解锁，然后点「连接」。",
+              "Not connected. Plug in your phone, unlock it, then hit Connect.");
+    setBanner(null);
+    $("dConnect").disabled = false;
+    $("dReset").disabled = true;
+    clearRoute();
+    pos.lat = START[0]; pos.lon = START[1];
+    marker.setLatLng(START);
+    map.setView(START, 15, { animate: true });
+    paintCoord();
+    toast("已恢复真实 GPS", "Real GPS restored");
+  });
+
+  // guard: every interaction requires a connection, exactly like the app
+  function needConnect(){
+    if (connected) return false;
+    toast("请先点「连接」", "Hit Connect first");
+    var c = $("dConnect");
+    c.style.transition = "none";
+    c.style.boxShadow = "0 0 0 4px rgba(26,115,232,.35)";
+    setTimeout(function(){ c.style.transition = ".4s"; c.style.boxShadow = ""; }, 480);
+    return true;
+  }
+
+  // ---- map click: teleport, or drop a waypoint in route mode ----
+  map.on("click", function(e){
+    if (needConnect()) return;
+    if (mode === "route") { addWaypoint(e.latlng.lat, e.latlng.lng); return; }
+    setMarker(e.latlng.lat, e.latlng.lng);
+    toast("定位已更新", "Location updated");
+  });
+
+  // ---- search: place names + raw coordinates ----
+  var PLACES = [
+    { zh:"东京塔",        en:"Tokyo Tower",        lat:35.6586,  lon:139.7454 },
+    { zh:"上海外滩",      en:"The Bund, Shanghai", lat:31.2397,  lon:121.4900 },
+    { zh:"纽约时代广场",  en:"Times Square, NYC",  lat:40.7580,  lon:-73.9855 },
+    { zh:"巴黎埃菲尔铁塔",en:"Eiffel Tower, Paris",lat:48.8584,  lon:2.2945   },
+    { zh:"伦敦大本钟",    en:"Big Ben, London",    lat:51.5007,  lon:-0.1246  },
+    { zh:"苹果总部",      en:"Apple Park",         lat:37.3349,  lon:-122.0090}
+  ];
+
+  var chips = $("dChips");
+  PLACES.forEach(function(p){
+    var b = document.createElement("button");
+    b.className = "dchip";
+    b.innerHTML = '<span class="zh">' + p.zh + '</span><span class="en">' + p.en + '</span>';
+    b.addEventListener("click", function(){
+      if (needConnect()) return;
+      setMarker(p.lat, p.lon);
+      map.setView([p.lat, p.lon], 15, { animate: true });
+      toast("已前往 " + p.zh, "Moved to " + p.en);
+    });
+    chips.appendChild(b);
+  });
+
+  $("dSearch").addEventListener("keydown", function(e){
+    if (e.key !== "Enter") return;
+    if (needConnect()) return;
+    var v = this.value.trim();
+    // "lat, lon" goes straight through, like the real search box
+    var m = v.match(/^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (m) {
+      var la = parseFloat(m[1]), lo = parseFloat(m[2]);
+      if (la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+        setMarker(la, lo); map.setView([la, lo], 15, { animate: true });
+        toast("已前往坐标", "Moved to coordinates");
+        this.value = ""; return;
+      }
+    }
+    var q = v.toLowerCase();
+    var hit = PLACES.filter(function(p){
+      return p.zh.indexOf(v) >= 0 || p.en.toLowerCase().indexOf(q) >= 0;
+    })[0];
+    if (hit) {
+      setMarker(hit.lat, hit.lon); map.setView([hit.lat, hit.lon], 15, { animate: true });
+      toast("已前往 " + hit.zh, "Moved to " + hit.en);
+      this.value = "";
+    } else {
+      toast("无结果（试试下面的快捷地点）", "No result — try a chip below");
+    }
+  });
+
+  // ---- speed presets ----
+  document.querySelectorAll("#dSpeeds button").forEach(function(b){
+    b.addEventListener("click", function(){
+      speedMps = parseFloat(b.dataset.mps);
+      document.querySelectorAll("#dSpeeds button").forEach(function(x){ x.classList.toggle("on", x === b); });
+    });
+  });
+
+  // ---- mode tabs ----
+  $("dTabFree").addEventListener("click", function(){
+    mode = "free";
+    $("dTabFree").classList.add("on"); $("dTabRoute").classList.remove("on");
+    $("dFree").style.display = ""; $("dRoute").style.display = "none";
+  });
+  $("dTabRoute").addEventListener("click", function(){
+    mode = "route";
+    $("dTabRoute").classList.add("on"); $("dTabFree").classList.remove("on");
+    $("dRoute").style.display = ""; $("dFree").style.display = "none";
+    toast("在地图上点几个点", "Click a few points on the map");
+  });
+
+  // ---- joystick ----
+  var joy = $("djoy"), nub = $("djoyNub");
+  var JOY_R = 66, MAXOFF = 41, joyActive = false;
+  function setNub(dx, dy){ nub.style.transform = "translate(" + dx + "px," + dy + "px)"; }
+  function joyMove(cx, cy){
+    var r = joy.getBoundingClientRect();
+    var dx = cx - (r.left + JOY_R), dy = cy - (r.top + JOY_R);
+    var d = Math.hypot(dx, dy);
+    if (d > MAXOFF) { dx = dx / d * MAXOFF; dy = dy / d * MAXOFF; }
+    setNub(dx, dy);
+    dir.x = dx / MAXOFF; dir.y = -dy / MAXOFF;
+  }
+  function joyEnd(){ joyActive = false; dir.x = 0; dir.y = 0; setNub(0, 0); }
+  joy.addEventListener("pointerdown", function(e){
+    if (needConnect()) return;
+    joyActive = true; joy.setPointerCapture(e.pointerId); joyMove(e.clientX, e.clientY);
+  });
+  joy.addEventListener("pointermove", function(e){ if (joyActive) joyMove(e.clientX, e.clientY); });
+  joy.addEventListener("pointerup", joyEnd);
+  joy.addEventListener("pointercancel", joyEnd);
+
+  // ---- keyboard: only while the demo is on screen, and never while typing ----
+  var keys = {};
+  var demoVisible = false;
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(function(es){
+      demoVisible = es[0].isIntersecting;
+      if (!demoVisible) { keys = {}; if (!joyActive) { dir.x = dir.y = 0; setNub(0,0); } }
+    }, { threshold: .25 }).observe($("dMap").closest(".window"));
+  } else { demoVisible = true; }
+
+  window.addEventListener("keydown", function(e){
+    if (!demoVisible || !connected) return;
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    var k = e.key.toLowerCase();
+    if (k === "shift") { shiftHeld = true; return; }
+    if (["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright"].indexOf(k) < 0) return;
+    e.preventDefault();          // stop the page scrolling under the arrows
+    keys[k] = true; applyKeys();
+  });
+  window.addEventListener("keyup", function(e){
+    var k = e.key.toLowerCase();
+    if (k === "shift") { shiftHeld = false; return; }
+    delete keys[k]; applyKeys();
+  });
+  function applyKeys(){
+    if (joyActive) return;       // the stick wins if both are in use
+    var x = 0, y = 0;
+    if (keys.w || keys.arrowup) y += 1;
+    if (keys.s || keys.arrowdown) y -= 1;
+    if (keys.a || keys.arrowleft) x -= 1;
+    if (keys.d || keys.arrowright) x += 1;
+    dir.x = x; dir.y = y;
+    var mag = Math.hypot(x, y) || 1;
+    setNub((x / mag) * MAXOFF * (x || y ? 1 : 0), (-y / mag) * MAXOFF * (x || y ? 1 : 0));
+  }
+
+  // ---- movement tick: the app's exact metres-per-degree math ----
+  var lastTick = performance.now();
+  function tick(){
+    var now = performance.now();
+    var dt = (now - lastTick) / 1000;
+    lastTick = now;
+    if (connected && mode === "free") {
+      var mag = Math.hypot(dir.x, dir.y);
+      if (mag > 0.02) {
+        var spd = speedMps * (shiftHeld ? 3 : 1);
+        var nx = dir.x / mag, ny = dir.y / mag;
+        var dist = spd * dt * Math.min(1, mag);
+        var dLat = (ny * dist) / 111320;
+        var dLon = (nx * dist) / (111320 * Math.cos(pos.lat * Math.PI / 180) || 1e-6);
+        setMarker(
+          Math.max(-90, Math.min(90, pos.lat + dLat)),
+          ((pos.lon + dLon + 540) % 360) - 180
+        );
+        keepInView();
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  function keepInView(){
+    if (!map.getBounds().pad(-0.28).contains([pos.lat, pos.lon])) {
+      map.panTo([pos.lat, pos.lon], { animate: true, duration: .5 });
+    }
+  }
+  requestAnimationFrame(tick);
+
+  // ---- route mode ----
+  function wpIcon(i){
+    return L.divIcon({
+      className: "",
+      html: '<div class="wp-pin"><span>' + String.fromCharCode(65 + i) + '</span></div>',
+      iconSize: [25,25], iconAnchor: [12,23]
+    });
+  }
+  function addWaypoint(lat, lon){
+    var m = L.marker([lat, lon], { icon: wpIcon(waypoints.length) }).addTo(map);
+    waypoints.push({ lat: lat, lon: lon, marker: m });
+    paintWaypoints();
+  }
+  function paintWaypoints(){
+    var ul = $("dWpList");
+    ul.innerHTML = "";
+    if (!waypoints.length) {
+      ul.innerHTML = '<li class="empty"><span class="zh">还没有途经点</span>'
+                   + '<span class="en">No waypoints yet</span></li>';
+      $("dWalk").disabled = true;
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      return;
+    }
+    waypoints.forEach(function(w, i){
+      var li = document.createElement("li");
+      li.innerHTML = '<span class="b">' + String.fromCharCode(65 + i) + '</span>'
+        + '<span class="c">' + w.lat.toFixed(4) + ", " + w.lon.toFixed(4) + '</span>'
+        + '<span class="x">&times;</span>';
+      li.querySelector(".x").addEventListener("click", function(){
+        map.removeLayer(w.marker);
+        waypoints.splice(i, 1);
+        waypoints.forEach(function(x, j){ x.marker.setIcon(wpIcon(j)); });
+        paintWaypoints();
+      });
+      ul.appendChild(li);
+    });
+    $("dWalk").disabled = waypoints.length < 2;
+    drawLine();
+  }
+  function drawLine(){
+    if (routeLine) map.removeLayer(routeLine);
+    if (waypoints.length < 2) { routeLine = null; return; }
+    routeLine = L.polyline(waypoints.map(function(w){ return [w.lat, w.lon]; }),
+      { color: "#1a73e8", weight: 4, opacity: .75 }).addTo(map);
+  }
+  function clearRoute(){
+    waypoints.forEach(function(w){ map.removeLayer(w.marker); });
+    waypoints = [];
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    $("dProg").classList.remove("show");
+    $("dProg").firstElementChild.style.width = "0";
+    paintWaypoints();
+  }
+  $("dClearRoute").addEventListener("click", function(){ walkAbort = true; walking = false; clearRoute(); });
+
+  $("dWalk").addEventListener("click", function(){
+    if (needConnect()) return;
+    if (walking) { walkAbort = true; return; }
+    if (waypoints.length < 2) { toast("请至少点两个途经点", "Drop at least two waypoints"); return; }
+
+    // Densify the polyline into ~5 m steps, then advance at the chosen speed.
+    // The real app hands the waypoints to OSRM first so the path follows roads;
+    // straight segments are the honest simplification for an offline demo.
+    var pts = [];
+    for (var i = 0; i < waypoints.length - 1; i++) {
+      var a = waypoints[i], b = waypoints[i+1];
+      var d = haversine(a.lat, a.lon, b.lat, b.lon);
+      var n = Math.max(2, Math.round(d / 5));
+      for (var k = 0; k < n; k++) {
+        pts.push([a.lat + (b.lat - a.lat) * (k/n), a.lon + (b.lon - a.lon) * (k/n)]);
+      }
+    }
+    pts.push([waypoints[waypoints.length-1].lat, waypoints[waypoints.length-1].lon]);
+
+    walking = true; walkAbort = false;
+    $("dProg").classList.add("show");
+    $("dWalk").innerHTML = '■ <span class="zh">停止</span><span class="en">Stop</span>';
+    var idx = 0;
+    var stepMs = Math.max(16, (5 / speedMps) * 1000);   // 5 m per step
+
+    (function step(){
+      if (walkAbort || idx >= pts.length) {
+        walking = false;
+        $("dWalk").innerHTML = '▶ <span class="zh">开始</span><span class="en">Start</span>';
+        if (!walkAbort) toast("到达终点", "Arrived");
+        return;
+      }
+      setMarker(pts[idx][0], pts[idx][1]);
+      keepInView();
+      $("dProg").firstElementChild.style.width = ((idx / (pts.length - 1)) * 100).toFixed(1) + "%";
+      idx++;
+      setTimeout(step, stepMs);
+    })();
+  });
+
+  function haversine(la1, lo1, la2, lo2){
+    var R = 6371000, r = Math.PI/180;
+    var dLat = (la2-la1)*r, dLon = (lo2-lo1)*r;
+    var h = Math.sin(dLat/2)*Math.sin(dLat/2)
+          + Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dLon/2)*Math.sin(dLon/2);
+    return 2*R*Math.asin(Math.sqrt(h));
+  }
+
+  // ---- initial paint ----
+  paintCoord();
+  paintWaypoints();
+  setTimeout(function(){ map.invalidateSize(); }, 200);
+  window.addEventListener("resize", function(){ map.invalidateSize(); });
+})();
+</script>
+</body>
+</html>
