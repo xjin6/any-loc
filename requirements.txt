@@ -4,10 +4,13 @@
 #
 # pymobiledevice3 — the iOS side: RemoteXPC tunnel + DVT LocationSimulation.
 #   v10+ additionally enables the no-root userspace tunnel on macOS (see
-#   userspace_tunnel_supported() in src/launcher.py); on 9.x the app falls back
-#   to the elevated tunneld path automatically, so 9.x still works.
+#   userspace_tunnel_supported() in src/launcher.py).
+#   Minimum raised from 9.0.0: AnyLoc 1.0.0 shipped 9.33.0, whose tunneld never
+#   listed an iPhone 18 Pro Max on iOS 27.2 ("Tunnel is up but no device
+#   found"). 11.45.0 is verified on that device: userspace tunnel, Cryptex DDI
+#   auto-mount, location set/clear.
 #   It also brings uvicorn in transitively, which start_tunneld() uses directly.
-pymobiledevice3>=9.0.0
+pymobiledevice3>=11.45.0
 
 # pywebview — the native app window (WKWebView on macOS, Edge WebView2 on
 #   Windows). src/gui.py imports it lazily inside run_window(), so running from

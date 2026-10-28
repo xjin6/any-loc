@@ -22,7 +22,7 @@ from typing import AsyncIterator
 
 from backend_base import LocationBackend, LocationSession
 
-# ---- pymobiledevice3 (verified against v9.32.0) -----------------------------
+# ---- pymobiledevice3 (verified against v11.45.0, iOS 27.2) -------------------
 from pymobiledevice3.tunneld.api import (
     TUNNELD_DEFAULT_ADDRESS,
     get_tunneld_devices,
