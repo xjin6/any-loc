@@ -143,6 +143,8 @@ _collect_pkgs = [
     "pymobiledevice3", "pytun_pmd3", "developer_disk_image", "ipsw_parser",
     "qh3", "uvicorn", "construct", "opack2", "bpylist2", "pyimg4",
     "remotezip2", "pykdebugparser",
+    # pymobiledevice3 10+: the no-root userspace tunnel runs on these.
+    "pmd_pytcp", "pmd_net_addr",
 ]
 if IS_MACOS:
     _collect_pkgs.append("apple_compress")
