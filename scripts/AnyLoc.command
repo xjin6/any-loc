@@ -3,9 +3,8 @@
 #  AnyLoc — macOS 一键启动（从源码运行，无需打包）
 #
 #  双击这个文件即可。它会：
-#    1. 用 sudo 请求 root（连接 iPhone 的隧道需要），会让你输入开机密码；
-#    2. 启动本地网页服务 + 隧道；
-#    3. 自动打开浏览器 http://127.0.0.1:8765 。
+#    1. 启动本地网页服务及原生应用窗口；
+#    2. 在界面选择 USB / Wi-Fi 和设备，然后点击连接。
 #
 #  想停止：直接关掉这个终端窗口。
 #
@@ -32,9 +31,9 @@ if [ -z "$PY" ]; then
 fi
 
 echo "使用 Python: $PY"
-echo "AnyLoc 需要 root 来创建到 iPhone 的隧道，接下来会让你输入开机密码。"
+echo "在窗口选择 USB 或 Wi-Fi 后连接。iOS 17.4+ 无需 root。"
+echo "仅 iOS 17.0-17.3 的 USB 连接需要手动使用 sudo 启动。"
 echo
 
-# launcher.py itself will re-exec under sudo when it detects it's not root and
-# it's attached to a TTY (this window). Running it directly is enough.
+# Modern USB/Wi-Fi sessions create their own in-process tunnel.
 exec "$PY" src/launcher.py

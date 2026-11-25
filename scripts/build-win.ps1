@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 #  build-win.ps1 — 在 Windows 上把 AnyLoc 打包成单个 .exe
 # =============================================================================
 #  产物（输出到 platforms\windows\dist\）：
@@ -28,7 +28,10 @@ param(
     [switch]$OneDir,
 
     # 保留参数兼容性；一次性环境中不能跳过依赖安装。
-    [switch]$SkipDeps
+    [switch]$SkipDeps,
+
+    # Optional interpreter path when several Python versions are installed.
+    [string]$PythonExe
 )
 
 # 任何未捕获的错误都要让脚本立刻失败 —— 半成品 exe 比没有 exe 更糟。
@@ -54,12 +57,15 @@ Write-Host "==> AnyLoc Windows 构建：variant=$Variant  onedir=$($OneDir.IsPre
 # ---- 0) find a Python to CREATE the venv with -------------------------------
 # 只用来造 venv；真正打包用的是 venv 里那个解释器。
 function Find-BootstrapPython {
-    foreach ($cand in @("py", "python3", "python")) {
+    $candidates = if ($PythonExe) { @($PythonExe) } else { @("py", "python3", "python") }
+    foreach ($cand in $candidates) {
         $cmd = Get-Command $cand -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }
         # `py` 是启动器，要 -3 才拿得到版本；其余直接问。
         if ($cand -eq "py") { $v = (& $cand -3 --version 2>&1) } else { $v = (& $cand --version 2>&1) }
-        if ($LASTEXITCODE -eq 0 -and "$v" -match "Python 3") { return $cand }
+        if ($LASTEXITCODE -eq 0 -and "$v" -match 'Python (\d+)\.(\d+)') {
+            if ([int]$Matches[1] -eq 3 -and [int]$Matches[2] -ge 10) { return $cand }
+        }
     }
     return $null
 }
@@ -73,7 +79,7 @@ try {
 if (-not (Test-Path $VenvPy)) {
     $boot = Find-BootstrapPython
     if (-not $boot) {
-        Write-Host "!! 找不到 Python 3。请先装 Python 3.10+ 并勾上 'Add to PATH'。" -ForegroundColor Red
+        Write-Host "!! 找不到 Python 3.10+。请安装 Python 3.12，或用 -PythonExe 指定解释器路径。" -ForegroundColor Red
         exit 1
     }
     Write-Host "==> [1/4] 在临时目录新建一次性构建环境 $VenvDir （用 $boot）..."

@@ -119,6 +119,13 @@ if IS_MACOS and APP_ICON is None:
 datas, binaries, hiddenimports = [], [], []
 datas += [("web", "web")]
 
+# Some Python distributions load an additional certificate policy file beside
+# ssl.py. Keep that policy intact in the frozen runtime when it is present.
+import ssl as _ssl
+_ssl_policy = os.path.join(os.path.dirname(_ssl.__file__), "codex-rejected-cas.pem")
+if os.path.isfile(_ssl_policy):
+    datas += [(_ssl_policy, ".")]
+
 # Bundle adb (Android Debug Bridge) so Android mode works with no separate SDK
 # install. android_backend.find_adb() looks for it at the _MEIPASS root when
 # frozen, so we ship it there (dest "."). Windows adb needs its two helper DLLs
@@ -218,7 +225,7 @@ hiddenimports += [
 #             --selftest never need pywebview at all. That laziness is the whole
 #             reason it must be listed here.
 hiddenimports += ["backend", "backend_base", "ios_backend", "android_backend",
-                  "applog", "gui"]
+                  "ios_transport", "applog", "gui"]
 
 # Tunnel-service modules: names have shifted across pymobiledevice3 versions
 # (e.g. `core_device_tunnel_service` was folded into `tunnel_service` around

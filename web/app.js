@@ -110,6 +110,8 @@ if (!LANG || !I18N[LANG]) {
 function t(key) {
   const d = I18N[LANG] || {};
   if (key in d) return d[key];
+  const en = I18N.en || {};
+  if (key in en) return en[key];
   const zh = I18N.zh || {};
   return key in zh ? zh[key] : key;
 }
@@ -159,6 +161,7 @@ function refreshDynamicLabels() {
   try { relabelLayers(); } catch (e) {}
   try { renderFavs(); } catch (e) {}
   try { renderWaypoints(); } catch (e) {}
+  try { renderIosConnection(); } catch (e) {}
   try { poll(); } catch (e) {}
 }
 
@@ -437,9 +440,17 @@ let pos = { lat: START[0], lon: START[1] };
 let speedMps = 4;
 let mode = "free";           // "free" | "route"
 let curState = "idle";       // last known backend state (for button logic)
+let currentPlatform = null;
+let iosTransport = "usb", iosInitialized = false, iosInitialScan = false;
+const iosDevices = { usb: null, wifi: null };
+const iosSelection = { usb: "", wifi: "" };
+let wifiSetupSelection = "";
+let connectionBusy = "", clearBusy = false, connectHttpPending = false;
+let awaitingConnection = null, connectionGate = false, statusGeneration = 0;
+let connectionNotice = null;
 
 // ---------- position send (coalesced, latest-wins) ----------
-let pending = null, sending = false, lastSent = 0;
+let pending = null, sending = false, lastSent = 0, sendInFlight = null;
 // Set by "restore real GPS". The route walk streams ~10 POSTs/second, and the
 // backend treats ANY /api/set as "cancel the pending clear" -- so without this
 // gate the clear reached the phone and the very next frame of the walk put it
@@ -447,28 +458,38 @@ let pending = null, sending = false, lastSent = 0;
 // spoof resumed within ~100ms. Cleared again the moment the user deliberately
 // asks for a new position (map click, drag, joystick, walk).
 let spoofSuspended = false;
+function movementBlocked() {
+  return Boolean(connectionGate || connectionBusy || awaitingConnection || clearBusy || curState === "connecting");
+}
 async function flush() {
+  if (spoofSuspended || movementBlocked()) { pending = null; return; }
   if (sending) return;
   if (pending == null) return;
   const now = performance.now();
   if (now - lastSent < 90) { setTimeout(flush, 90 - (now - lastSent)); return; }
   const payload = pending; pending = null; sending = true; lastSent = now;
   try {
-    await fetch("/api/set", {
+    sendInFlight = fetch("/api/set", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    await sendInFlight;
   } catch (e) {}
+  sendInFlight = null;
   sending = false;
   if (pending != null) flush();
 }
 function sendLocation(lat, lon) {
-  if (spoofSuspended) return;        // after a clear: stay on real GPS
+  if (spoofSuspended || movementBlocked()) return;
   pending = { lat, lon }; flush();
 }
 // Every deliberate "put the device HERE" action calls this first, so spoofing
 // resumes only on user intent -- never on a stray in-flight frame.
-function resumeSpoof() { spoofSuspended = false; }
+function resumeSpoof() {
+  if (movementBlocked()) return false;
+  spoofSuspended = false;
+  return true;
+}
 
 function setMarker(lat, lon, pan = false) {
   pos.lat = lat; pos.lon = clampLon(lon);
@@ -487,10 +508,162 @@ function focusMap(lat, lon, zoom = 17) { if (map) map.setView([lat, lon], zoom);
 // ============================================================================
 // CONNECT / CLEAR
 // ============================================================================
+function suspendMovement() {
+  stopWalk();
+  releaseAllKeys();
+  joyEnd();
+  spoofSuspended = true;
+  pending = null;
+}
+function setConnectionNotice(message, kind = "error", isKey = false) {
+  connectionNotice = message ? { message, kind, isKey } : null;
+  const el = $("connectionNotice");
+  el.textContent = message ? (isKey ? t(message) : message) : "";
+  el.className = "dm-banner inline" + (message ? " show " + kind : "");
+}
+async function connectionApi(url, options = {}, timeout = 60000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) throw new Error(data.error || t("ios.requestFailed"));
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error(t("ios.requestTimeout"));
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+function fillDeviceSelect(id, devices, selected) {
+  const select = $(id);
+  select.replaceChildren();
+  const placeholder = devices === null ? "ios.scanFirst" : devices.length ? "ios.chooseDevice" : "ios.noDevices";
+  select.add(new Option(t(placeholder), ""));
+  (devices || []).forEach((device) => {
+    const version = device.os_version ? " · iOS " + device.os_version : "";
+    const shortId = device.id.length > 14 ? device.id.slice(0, 12) + "…" : device.id;
+    const label = device.name ? device.name + version + " · " + shortId : device.id + version;
+    select.add(new Option(label, device.id));
+  });
+  if ((devices || []).some((device) => device.id === selected)) select.value = selected;
+  else if (!selected && devices && devices.length === 1) select.value = devices[0].id;
+  return select.value;
+}
+function renderIosConnection() {
+  $("iosTransport").value = iosTransport;
+  $("wifiConnectionHelp").classList.toggle("hidden", iosTransport !== "wifi");
+  $("iosDeviceLabel").textContent = t(iosTransport === "wifi" ? "ios.wifiDevice" : "ios.device");
+  const previous = iosSelection[iosTransport];
+  iosSelection[iosTransport] = fillDeviceSelect("iosDevice", iosDevices[iosTransport], previous);
+  if (previous && previous !== iosSelection[iosTransport]) {
+    connectionGate = true;
+    suspendMovement();
+  }
+  wifiSetupSelection = fillDeviceSelect("wifiSetupDevice", iosDevices.usb, wifiSetupSelection || iosSelection.usb);
+  if (connectionNotice) setConnectionNotice(connectionNotice.message, connectionNotice.kind, connectionNotice.isKey);
+  updateConnectionControls();
+}
+function updateConnectionControls() {
+  const isIos = currentPlatform === "ios";
+  const busy = Boolean(connectionBusy || awaitingConnection || clearBusy || curState === "connecting");
+  $("iosConnectionControls").classList.toggle("hidden", !isIos);
+  ["iosTransport", "iosDevice", "wifiSetupDevice", "btnRefreshDevices", "btnRefreshUsbDevices"].forEach((id) => { $(id).disabled = busy; });
+  $("btnEnableWifi").disabled = busy || !wifiSetupSelection;
+  $("btnEnableWifi").textContent = t(connectionBusy === "enable" ? "ios.enablingWifi" : "ios.enableWifi");
+  $("btnRefreshDevices").textContent = t(connectionBusy === "scan" ? "ios.scanning" : "ios.refresh");
+  $("btnRefreshUsbDevices").textContent = t(connectionBusy === "scan-usb" ? "ios.scanning" : "ios.refresh");
+  $("btnConnect").disabled = busy || (isIos && !iosSelection[iosTransport]);
+  $("btnConnect").textContent = t(connectionBusy === "connect" || awaitingConnection || curState === "connecting" ? "btn.connecting" : curState === "connected" ? "btn.reconnect" : "btn.connect");
+  $("btnClear").disabled = busy;
+  $("btnClear").textContent = t(clearBusy ? "btn.resetting" : "btn.reset");
+}
+async function refreshIosDevices(forSetup = false) {
+  if (connectionBusy || awaitingConnection || clearBusy || curState === "connecting") return;
+  const transport = forSetup ? "usb" : iosTransport;
+  connectionBusy = forSetup ? "scan-usb" : "scan";
+  setConnectionNotice(null);
+  updateConnectionControls();
+  try {
+    const data = await connectionApi("/api/ios/devices?transport=" + transport);
+    iosDevices[transport] = (Array.isArray(data.devices) ? data.devices : []).filter((device) => device && typeof device.id === "string" && device.id);
+    renderIosConnection();
+    if (!iosDevices[transport].length) {
+      setConnectionNotice(transport === "wifi" ? "ios.noWifiHint" : "ios.noUsbHint", "waiting", true);
+      if (transport === "wifi") $("wifiSetup").open = true;
+    }
+  } catch (error) { setConnectionNotice(error.message || t("ios.requestFailed")); }
+  finally { connectionBusy = ""; updateConnectionControls(); }
+}
+$("iosTransport").addEventListener("change", () => {
+  // A selection is only applied by Connect. Keep movement paused meanwhile,
+  // so a changed selector cannot accidentally move the previously-connected phone.
+  iosTransport = $("iosTransport").value === "wifi" ? "wifi" : "usb";
+  connectionGate = true;
+  suspendMovement();
+  renderIosConnection();
+  if (iosTransport === "wifi" && !(iosDevices.wifi || []).length) $("wifiSetup").open = true;
+  refreshIosDevices();
+});
+$("iosDevice").addEventListener("change", () => {
+  iosSelection[iosTransport] = $("iosDevice").value;
+  connectionGate = true;
+  suspendMovement();
+  setConnectionNotice("ios.ready", "waiting", true);
+  updateConnectionControls();
+});
+$("wifiSetupDevice").addEventListener("change", () => {
+  wifiSetupSelection = $("wifiSetupDevice").value;
+  updateConnectionControls();
+});
+$("btnRefreshDevices").addEventListener("click", () => refreshIosDevices());
+$("btnRefreshUsbDevices").addEventListener("click", () => refreshIosDevices(true));
+$("btnEnableWifi").addEventListener("click", async () => {
+  if ($("btnEnableWifi").disabled) return;
+  connectionBusy = "enable";
+  setConnectionNotice(null);
+  updateConnectionControls();
+  try {
+    await connectionApi("/api/ios/wifi/enable", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: wifiSetupSelection || null }),
+    });
+    setConnectionNotice("ios.wifiEnabled", "enabled", true);
+    $("wifiSetup").open = false;
+  } catch (error) { setConnectionNotice(error.message || t("ios.requestFailed")); }
+  finally { connectionBusy = ""; updateConnectionControls(); }
+});
 $("btnConnect").addEventListener("click", async () => {
-  $("btnConnect").textContent = t("btn.connecting");
-  try { await fetch("/api/connect", { method: "POST" }); } catch (e) {}
-  setTimeout(poll, 300);
+  if ($("btnConnect").disabled) return;
+  connectionBusy = "connect";
+  connectionGate = true;
+  suspendMovement();
+  setConnectionNotice("ios.connectionPending", "waiting", true);
+  updateConnectionControls();
+  let movementTimer;
+  try {
+    // Wait for the last coordinate POST to finish before switching devices.
+    // Aborting fetch would not guarantee that the server stopped processing it.
+    if (sendInFlight) await Promise.race([
+      sendInFlight.catch(() => {}),
+      new Promise((_, reject) => { movementTimer = setTimeout(() => reject(new Error(t("ios.waitForMovement"))), 10000); }),
+    ]);
+    const choice = currentPlatform === "ios" ? { transport: iosTransport, device_id: iosSelection[iosTransport] || null } : {};
+    connectHttpPending = true;
+    statusGeneration++;
+    await connectionApi("/api/connect", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...choice, reconnect: true }),
+    });
+    awaitingConnection = choice;
+  } catch (error) { setConnectionNotice(error.message || t("ios.requestFailed")); }
+  finally {
+    clearTimeout(movementTimer);
+    connectHttpPending = false;
+    statusGeneration++;
+    connectionBusy = "";
+    updateConnectionControls();
+    poll();
+  }
 });
 $("btnClear").addEventListener("click", async () => {
   const btn = $("btnClear");
@@ -498,12 +671,9 @@ $("btnClear").addEventListener("click", async () => {
   // Order matters. Stop the route walk and gate the sender BEFORE the clear
   // request goes out: the walk's next frame would otherwise re-spoof the device
   // the instant the clear landed.
-  stopWalk();
-  spoofSuspended = true;
-  pending = null;                   // drop anything already queued
-  btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = t("btn.resetting");
+  suspendMovement();
+  clearBusy = true;
+  updateConnectionControls();
   try {
     // If the session isn't live (idle/error/never connected), reconnect first
     // so the clear command actually reaches the device.
@@ -521,8 +691,8 @@ $("btnClear").addEventListener("click", async () => {
     }
     await fetch("/api/clear", { method: "POST" });
   } catch (e) {}
-  btn.disabled = false;
-  btn.textContent = orig;
+  clearBusy = false;
+  updateConnectionControls();
   setTimeout(poll, 300);
 });
 
@@ -833,8 +1003,8 @@ let dir = { x: 0, y: 0 };
 let shiftHeld = false;
 
 function moveByMeters(dEast, dNorth) {
+  if (!resumeSpoof()) return;
   userMovedMap = true;
-  resumeSpoof();
   const dLat = dNorth / 111320;
   const dLon = dEast / (111320 * Math.cos(pos.lat * Math.PI / 180) || 1e-6);
   const lat = Math.max(-90, Math.min(90, pos.lat + dLat));
@@ -877,7 +1047,8 @@ function recomputeKeyDir() {
   dir.x = x; dir.y = y;
 }
 window.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT") return;
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName) || e.target.isContentEditable) return;
+  if (movementBlocked()) return;
   const k = e.key.toLowerCase();
   if (k === "shift") shiftHeld = true;
   if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) {
@@ -915,7 +1086,10 @@ function joyMove(cx, cy) {
   setNub(dx, dy); dir.x = dx / MAXOFF; dir.y = -dy / MAXOFF;
 }
 function joyEnd() { joyActive = false; dir.x = 0; dir.y = 0; setNub(0, 0); }
-joy.addEventListener("pointerdown", (e) => { joyActive = true; joy.setPointerCapture(e.pointerId); joyMove(e.clientX, e.clientY); });
+joy.addEventListener("pointerdown", (e) => {
+  if (movementBlocked()) return;
+  joyActive = true; joy.setPointerCapture(e.pointerId); joyMove(e.clientX, e.clientY);
+});
 joy.addEventListener("pointermove", (e) => { if (joyActive) joyMove(e.clientX, e.clientY); });
 joy.addEventListener("pointerup", joyEnd);
 joy.addEventListener("pointercancel", joyEnd);
@@ -1114,7 +1288,7 @@ $("btnWalk").addEventListener("click", startWalk);
 $("btnStop").addEventListener("click", stopWalk);
 async function startWalk() {
   if (routeCoords.length < 2 || walking) return;
-  resumeSpoof();
+  if (!resumeSpoof()) return;
   walking = true; walkAbort = false;
   $("btnWalk").disabled = true; $("btnStop").disabled = false;
   $("walkProgress").classList.remove("hidden");
@@ -1168,21 +1342,55 @@ function stopWalk() {
 // STATUS POLLING
 // ============================================================================
 async function poll() {
+  const generation = statusGeneration;
   try {
     const r = await fetch("/api/status");
-    applyStatus(await r.json());
-  } catch (e) { applyStatus({ state: "error", error: t("status.backendDown") }); }
+    const status = await r.json();
+    if (generation === statusGeneration && !connectHttpPending) applyStatus(status);
+  } catch (e) {
+    if (generation === statusGeneration && !connectHttpPending) applyStatus({ state: "error", error: t("status.backendDown") });
+  }
 }
 function applyStatus(s) {
-  curState = s.state || "idle";
+  // The old session may still be connected while the worker clears it. Do not
+  // mistake that old connection for completion of a same-device reconnect.
+  curState = s.connection_pending ? "connecting" : s.state || "idle";
+  if (s.connection_pending) s = { ...s, state: curState };
+  currentPlatform = s.platform || currentPlatform;
+  if (awaitingConnection && curState !== "connecting") {
+    const configured = s.connection || {};
+    const matches = currentPlatform !== "ios" ||
+      (configured.transport === awaitingConnection.transport &&
+       (!awaitingConnection.device_id || configured.device_id === awaitingConnection.device_id));
+    if (curState === "error" || (["connected", "idle"].includes(curState) && matches)) {
+      awaitingConnection = null;
+      if (curState === "connected") {
+        connectionGate = false;
+        setConnectionNotice("ios.connectedHint", "enabled", true);
+      } else if (curState === "idle") {
+        setConnectionNotice("ios.connectionEnded", "waiting", true);
+      } else setConnectionNotice(null);  // The concrete backend error is shown below.
+    }
+  }
+  if (currentPlatform === "ios" && !iosInitialized) {
+    iosInitialized = true;
+    iosTransport = (s.connection || {}).transport === "wifi" || s.transport === "wifi" ? "wifi" : "usb";
+    const device = s.device || {};
+    iosSelection[iosTransport] = (s.connection || {}).device_id || device.id || "";
+    if (device.id) iosDevices[iosTransport] = [{ id: device.id, name: device.name || device.model || "", os_version: device.os_version }];
+    renderIosConnection();
+  }
+  if (currentPlatform === "ios" && !iosInitialScan && curState !== "connecting" && !connectionBusy && !awaitingConnection) {
+    iosInitialScan = true;
+    setTimeout(() => refreshIosDevices(), 0);
+  }
   const pill = $("statePill");
   pill.className = "pill " + (s.state || "idle");
   pill.textContent = t("state." + s.state) || s.state;
   $("dot").style.background = { idle: "#8b949e", connecting: "#d29922", connected: "#2ea043", error: "#da3633" }[s.state] || "#8b949e";
   $("dot").style.boxShadow = s.state === "connected" ? "0 0 0 4px rgba(46,160,67,.25)" : "none";
 
-  const btn = $("btnConnect");
-  btn.textContent = s.state === "connected" ? t("btn.reconnect") : s.state === "connecting" ? t("btn.connecting") : t("btn.connect");
+  updateConnectionControls();
 
   const d = s.device || {};
   const dm = s.devmode || {};
@@ -1193,17 +1401,23 @@ function applyStatus(s) {
     // Neutral device schema (platform/id/model/os_version/name) — branch label
     // on platform so iPhone shows "iOS", Android shows "Android".
     const osLabel = d.platform === "android" ? "Android" : "iOS";
-    $("deviceInfo").innerHTML = `<b>${d.model}</b> · ${osLabel} ${d.os_version || "?"}<br/>` +
-      `<span class="coord">${(d.id || "").slice(0, 12)}…</span>`;
+    const heading = document.createElement("b");
+    heading.textContent = d.name || d.model;
+    const identity = document.createElement("span");
+    identity.className = "coord";
+    identity.textContent = (d.id || "").slice(0, 12) + "…";
+    const transport = s.transport || (s.connection || {}).transport;
+    const connectionLabel = d.platform === "ios" && ["usb", "wifi"].includes(transport) ? " · " + t("ios." + transport) : "";
+    $("deviceInfo").replaceChildren(heading, document.createTextNode(` · ${osLabel} ${d.os_version || "?"}${connectionLabel}`), document.createElement("br"), identity);
     $("deviceInfo").style.display = "";
   } else if (s.state === "connecting") {
     $("deviceInfo").textContent = t("device.connecting");
     $("deviceInfo").style.display = "";
-  } else if (dm.state && dm.state !== "idle") {
+  } else if (s.error || (dm.state && dm.state !== "idle" && !(currentPlatform === "ios" && iosTransport === "wifi"))) {
     // a live devmode banner will speak for us — hide the redundant line
     $("deviceInfo").style.display = "none";
   } else {
-    $("deviceInfo").textContent = t("device.notConnected2");
+    $("deviceInfo").textContent = t(currentPlatform === "ios" ? "ios.ready" : "device.notConnected2");
     $("deviceInfo").style.display = "";
   }
 
@@ -1216,7 +1430,10 @@ function applyStatus(s) {
                    // Android (adb) setup states:
                    adb_waiting: "adb.waiting", adb_unauthorized: "adb.unauthorized",
                    adb_ready: "adb.ready", adb_error: "adb.error" };
-  if (dm.state && dm.state !== "idle" && DM_KEY[dm.state] && !(s.state === "connected")) {
+  if (s.error) {
+    banner.className = "dm-banner show error";
+    banner.textContent = "⚠️ " + s.error;
+  } else if (dm.state && dm.state !== "idle" && DM_KEY[dm.state] && !(s.state === "connected") && !(currentPlatform === "ios" && iosTransport === "wifi")) {
     banner.className = "dm-banner show " + dm.state;
     const icon = { waiting: "🔌", trust: "📱", revealing: "⚙️", reveal_done: "👉", enabled: "✅", error: "⚠️",
                    adb_waiting: "🔌", adb_unauthorized: "📱", adb_ready: "✅", adb_error: "⚠️" }[dm.state] || "ℹ️";

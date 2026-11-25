@@ -112,6 +112,17 @@
   /* reserve ~2 lines so the Connect buttons don't jump when the device line
      wraps to 2 lines in en/ja (or shows device info vs a notice) */
   #deviceInfo{min-height:3em}
+  .connection-controls{margin-bottom:12px}
+  .connection-field{margin-top:10px}
+  .connection-row{display:flex;gap:8px;align-items:center}
+  .connection-row select{min-width:0;flex:1}
+  .connection-row button{flex:none;padding:10px}
+  .connection-hint{font-size:11.5px;color:var(--muted);line-height:1.55;margin:7px 0 0}
+  .wifi-setup{margin-top:10px;border:1px solid var(--border);border-radius:10px;padding:10px}
+  .wifi-setup summary{font-size:12px;color:var(--blueText);cursor:pointer;font-weight:500}
+  .wifi-setup p{margin:9px 0}
+  .wifi-setup .enable-wifi{width:100%;margin-top:8px}
+  #connectionNotice{overflow-wrap:anywhere}
   .status-line b{color:var(--text);font-weight:600}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
   .pill.idle{background:var(--inset);color:var(--muted)}
@@ -383,7 +394,37 @@
     <!-- Device -->
     <div class="card">
       <h2 data-i18n="device.title">设备</h2>
+      <div id="iosConnectionControls" class="connection-controls hidden">
+        <label for="iosTransport" data-i18n="ios.transport">连接方式</label>
+        <select id="iosTransport" aria-describedby="bluetoothHint">
+          <option value="usb" data-i18n="ios.usb">USB（有线）</option>
+          <option value="wifi" data-i18n="ios.wifi">Wi-Fi（无线）</option>
+          <option value="bluetooth" disabled data-i18n="ios.bluetooth">蓝牙（暂不支持）</option>
+        </select>
+        <p id="bluetoothHint" class="connection-hint" data-i18n="ios.bluetoothHint">iOS 定位模拟暂不支持通过蓝牙连接。</p>
+        <div id="wifiConnectionHelp" class="hidden">
+          <details class="wifi-setup" id="wifiSetup">
+            <summary data-i18n="ios.wifiSetup">首次使用：通过 USB 启用 Wi-Fi</summary>
+            <p class="connection-hint" data-i18n="ios.wifiSetupHint">先用数据线连接并解锁 iPhone，点「信任」。开启开发者模式，并让电脑和手机连接同一 Wi-Fi。</p>
+            <label for="wifiSetupDevice" data-i18n="ios.setupDevice">准备启用的 USB 设备</label>
+            <div class="connection-row">
+              <select id="wifiSetupDevice"><option value="" data-i18n="ios.scanFirst">请先刷新设备列表</option></select>
+              <button id="btnRefreshUsbDevices" data-i18n="ios.refresh">刷新</button>
+            </div>
+            <button id="btnEnableWifi" class="blue enable-wifi" disabled data-i18n="ios.enableWifi">启用此设备的 Wi-Fi 连接</button>
+          </details>
+          <p class="connection-hint" data-i18n="ios.wifiConnectHint">启用成功后拔掉数据线，再刷新下方无线设备列表，选择设备并点「连接」。</p>
+        </div>
+        <div class="connection-field">
+          <label for="iosDevice" id="iosDeviceLabel" data-i18n="ios.device">选择设备</label>
+          <div class="connection-row">
+            <select id="iosDevice"><option value="" data-i18n="ios.scanFirst">请先刷新设备列表</option></select>
+            <button id="btnRefreshDevices" data-i18n="ios.refresh">刷新</button>
+          </div>
+        </div>
+      </div>
       <div class="status-line" id="deviceInfo" data-i18n="device.notConnected">未连接。</div>
+      <div id="connectionNotice" class="dm-banner inline" role="status" aria-live="polite"></div>
       <div class="dm-banner" id="dmBanner"></div>
       <div style="margin-top:9px" class="row">
         <button class="primary" id="btnConnect" data-i18n="btn.connect">连接</button>

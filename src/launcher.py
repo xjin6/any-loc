@@ -2,25 +2,11 @@
 """
 any-loc all-in-one launcher (becomes AnyLoc.exe on Windows / AnyLoc.app on macOS)
 =================================================================================
-Double-click behaviour:
-  1. Re-launch itself with elevated rights if not already privileged — the
-     tunnel needs Administrator (Windows) / root (macOS).
-       * Windows -> UAC prompt (ShellExecuteW "runas").
-       * macOS   -> opens Terminal and runs itself under `sudo` (inline password
-                    prompt); if already in a terminal, just re-execs via sudo.
-  2. Start the web UI server + device worker on a background thread.
-  3. Start pymobiledevice3's tunneld on a background daemon thread.
-  4. Give the MAIN thread to the app window (pywebview / Edge WebView2).
-
-One window, one elevation prompt. No batch/shell files.
-
-THREAD LAYOUT — the two constraints that decide everything here:
-  * pywebview MUST own the main thread (webview.start() raises off-main-thread),
-    so the UI is last and everything else is a daemon thread.
-  * tunneld is happy on a background thread (uvicorn merely skips installing
-    signal handlers when it isn't on the main thread).
-That is the opposite of the old console build, where tunneld blocked main and
-there was no window at all.
+Start the local web server and device worker, then give the main thread to
+pywebview. The user selects USB or Wi-Fi before connecting. Each iOS session
+owns its tunnel; automatic tunneld monitors do not run alongside it.
+The Windows release retains its administrator manifest for older iOS USB
+support. iOS 17.4+ uses an in-process tunnel on both Windows and macOS.
 """
 import logging
 import os
@@ -636,6 +622,7 @@ class _Shutdown:
         self.httpd = None
         self.tunneld_server = None
         self.tunneld_thread = None
+        self.watchers = []
         self.log = logging.getLogger("any-loc")
 
     def __call__(self) -> None:
@@ -646,6 +633,8 @@ class _Shutdown:
                 return
             self._done = True
             self.log.info("Shutting down …")
+            for watcher in self.watchers:
+                watcher.stop()
 
             # 1) device first — this is what restores real GPS. Blocking.
             if self.worker is not None:
@@ -881,83 +870,33 @@ def run_ui_blocking(url: str, shutdown_all: "_Shutdown", log) -> None:
 # Main
 # =============================================================================
 def run_dev(log) -> None:
-    """
-    Developer mode — fast UI iteration with live-reload (edit web/ → browser
-    auto-refreshes in ~1s), NO packaging needed.
-
-    Two ways to run:
-      * normal        -> serves the UI only (perfect for pure front-end work,
-                         but the tunnel is skipped so you can't reach a device)
-      * elevated      -> UI live-reload PLUS the real tunnel + Developer Mode
-                         watcher, so you can test spoofing on a real iPhone
-    To get the full flow:
-      * Windows: right-click dev.bat > Run as administrator
-      * macOS:   run `sudo ./dev.command` (or `sudo python3 launcher.py --dev`)
-    """
+    """Serve the development UI with the same USB/Wi-Fi worker as the app."""
     os.environ["ANYLOC_DEV"] = "1"
-    # re-evaluate backend's DEV_MODE now that the env var is set
     backend.DEV_MODE = True
-
     dev_host, dev_port = "127.0.0.1", 8766
-    admin = is_admin()
-
-    # Platform-specific hint for how to get the real-device flow in dev mode.
-    if IS_WINDOWS:
-        _elevate_hint = "关掉重来，右键 dev.bat > 以管理员身份运行"
-    else:
-        _elevate_hint = "关掉重来，改用 sudo ./dev.command（或 sudo python3 launcher.py --dev）"
-
-    print("\n" + "=" * 62)
-    print("  AnyLoc — 开发模式 (DEV)")
-    print(f"  网页:      http://{dev_host}:{dev_port}/")
-    print("  热重载:    改 web/ 里的文件 → 浏览器自动刷新（~1秒）")
-    if admin:
-        print("  真机隧道:  ✓ 已启用 —— 可连 iPhone 实测定位")
-    else:
-        print("  真机隧道:  ✗ 未启用（当前非管理员/非 root）")
-        print(f"             要实测定位：{_elevate_hint}")
-    print("  改 Python 后端: Ctrl+C 停，再重新运行开发脚本（dev.bat / dev.command）")
-    print("  按 Ctrl+C 停止。")
-    print("=" * 62 + "\n")
-
     worker = _ios_worker()
     worker.start()
-
-    # bind the web server on the dev port
     backend.Handler.worker = worker
     try:
         httpd = ThreadingHTTPServer((dev_host, dev_port), backend.Handler)
     except OSError as e:
-        log.error("无法启动开发服务器 %s:%s (%s)。可能已在运行？", dev_host, dev_port, e)
+        log.error("无法启动开发服务器 %s:%s (%s)。", dev_host, dev_port, e)
         return
     threading.Thread(target=httpd.serve_forever, daemon=True, name="web-dev").start()
-
     url = f"http://{dev_host}:{dev_port}/"
+    log.info("开发界面: %s — 选择有线或 Wi-Fi，然后点击连接。", url)
+    watcher = DevModeWatcher(worker)
+    watcher.start()
     threading.Timer(0.8, lambda: open_browser(url)).start()
-
-    if admin:
-        # full flow available — web server (with live-reload) is already running
-        # above; now bring up the device worker, dev-mode watcher, and tunnel.
-        worker.connect()
-        DevModeWatcher(worker).start()
-        log.info("以管理员/root 运行：启动隧道（连接 iPhone）…")
-        from pymobiledevice3.tunneld.server import TunneldRunner
-        from pymobiledevice3.tunneld.api import TUNNELD_DEFAULT_ADDRESS
-        try:
-            TunneldRunner.create(TUNNELD_DEFAULT_ADDRESS[0], TUNNELD_DEFAULT_ADDRESS[1])
-        except KeyboardInterrupt:
-            pass
-        finally:
-            worker.shutdown(); httpd.shutdown()
-    else:
-        # UI-only: just keep serving until Ctrl+C
-        log.info("界面已就绪（仅网页）。做前端改动 → 浏览器会自动刷新。Ctrl+C 退出。")
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            log.info("退出开发模式。")
-            worker.shutdown(); httpd.shutdown()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        watcher.stop()
+        worker.shutdown()
+        httpd.shutdown()
 
 
 def _log_file_path() -> str:
@@ -1023,8 +962,7 @@ def _main() -> None:
     log = logging.getLogger("any-loc")
 
     # --dev: developer mode. Fast iteration without packaging.
-    #   * no elevation (so it starts instantly; tunnel/devmode only run if you
-    #     happen to already be admin/root)
+    #   * normal USB/Wi-Fi sessions use the same worker as the packaged app
     #   * separate port (8766) so it never clashes with a running release build
     #   * live-reload: edit anything in web/ and the browser auto-refreshes
     # Use this while working on the UI. Package to .exe/.app only for release.
@@ -1077,7 +1015,9 @@ def _main() -> None:
             # verify tunnel components import (the risky frozen bit)
             from pymobiledevice3.remote.module_imports import verify_tunnel_imports
             from pymobiledevice3.tunneld.server import TunneldRunner  # noqa
-            print(f"[selftest] verify_tunnel_imports -> {verify_tunnel_imports()}")
+            tunnel_ok = verify_tunnel_imports()
+            print(f"[selftest] verify_tunnel_imports -> {tunnel_ok}")
+            ok = ok and tunnel_ok
         except Exception as e:
             print(f"[selftest] FAIL: {type(e).__name__}: {e}")
             ok = False
@@ -1098,124 +1038,14 @@ def _main() -> None:
     if use_android:
         return run_android(log)
 
-    # 1) Decide whether we need elevation AT ALL.
-    #
-    #    Historically the answer was always yes: the tunnel builds a kernel
-    #    `utun` interface, which requires Administrator/root. pymobiledevice3 10
-    #    can instead build the tunnel on a pure-Python userspace network stack,
-    #    which needs NO privileges — so on macOS the common case (iOS 17.4+ over
-    #    USB) now runs with no password prompt at all, and the app stays a normal
-    #    user process. That matters beyond convenience: a root-owned GUI app is
-    #    discouraged on macOS and would push the WebView profile and logs into
-    #    root's home instead of the user's.
-    #
-    #    iOS 17.0-17.3 has no CoreDeviceProxy service and still needs the kernel
-    #    tunnel; IosBackend fails fast in that case (see _userspace_rsd) and the
-    #    UI's error tells the user to relaunch elevated.
-    #
-    #    Windows keeps the original elevated path: it is the verified, shipped
-    #    behavior there, and UAC is a single click rather than a typed password.
-    use_userspace = (not IS_WINDOWS) and userspace_tunnel_supported() and not is_admin()
-    if use_userspace:
-        log.info("Using the in-process userspace tunnel — no root required.")
-        return run_ios_userspace(log)
-
-    if not is_admin():
-        if IS_WINDOWS:
-            log.info("Requesting administrator rights (needed for the tunnel) ...")
-        else:
-            log.info("Requesting root via sudo (needed for the tunnel) ...")
-        relaunch_as_admin()
-        return
-
-    # 1.5) single-instance lock — AFTER elevation, never before. The
-    #      non-elevated parent is still alive while UAC spawns the elevated
-    #      child, so taking the lock earlier would make us block our own child.
-    if not acquire_single_instance():
-        # Prefer DOING the obvious thing over telling the user to do it.
-        if focus_existing_window():
-            return
-        # No window to switch to: the lock is held by a process that is not
-        # showing a UI (crashed mid-teardown, or still exiting). Tell the user
-        # exactly how to get unstuck instead of leaving them at a dead end.
-        _already_running_error()
-        return
-
-    _priv = "administrator" if IS_WINDOWS else "root"
-    # These used to be print()s describing the console window you had to keep
-    # open. There is no console now — this is a real app window — and print()
-    # with sys.stdout=None is silently discarded anyway, so it goes to the log.
-    log.info("=" * 62)
-    log.info("  AnyLoc  —  running as %s", _priv)
-    log.info("  关掉这个窗口就会停止模拟并恢复真实定位。")
-    log.info("  最小化没关系，但模拟期间请不要关闭窗口。")
-    log.info("=" * 62)
-
-    # 2) tunnel import sanity
-    from pymobiledevice3.remote.module_imports import verify_tunnel_imports
-    if not verify_tunnel_imports():
+    # A selected session owns its tunnel. Background auto-tunneld monitors
+    # would race the process-global userspace network stack.
+    if not userspace_tunnel_supported():
         _native_error(
-            "The tunnel components failed to load. Try reinstalling:\n"
-            "   pip install -U pymobiledevice3",
-            "AnyLoc")
+            "USB / Wi-Fi 模式需要 pymobiledevice3 11.63.1 或更新版本。\n"
+            "请运行 pip install -U -r requirements.txt 后重试。", "AnyLoc")
         return
-
-    # 3) start web UI + device worker (background)
-    worker = _ios_worker()
-    worker.start()
-    worker.connect()  # will keep retrying via the UI's Connect button too
-    try:
-        httpd = start_web_server(worker)
-    except OSError as e:
-        # NOT "is AnyLoc already running?" — the mutex above answers that, and
-        # this port was never a lock (allow_reuse_address lets a second process
-        # bind it). A failure here is a genuinely occupied/blocked port.
-        _native_error(
-            f"无法在 {WEB_HOST}:{WEB_PORT} 启动界面服务。\n{e}\n\n"
-            f"Could not start the web UI on {WEB_HOST}:{WEB_PORT}.\n"
-            "另一个程序可能占用了这个端口。", "AnyLoc")
-        return
-
-    url = f"http://{WEB_HOST}:{WEB_PORT}/"
-    log.info("Web UI:  %s", url)
-
-    # 3.5) Continuously watch for a device and set up Developer Mode in the
-    #      background. NOT one-shot: a new phone may be plugged in / unlocked /
-    #      trusted long after launch, and the Trust dialog only appears once we
-    #      try to pair — so we keep retrying instead of checking a single time.
-    dm = DevModeWatcher(worker)
-    dm.start()
-
-    # 4) tunnel on a DAEMON THREAD (it used to block the main thread). The main
-    #    thread now belongs to the window — pywebview refuses to start anywhere
-    #    else.
-    log.info("Starting tunnel (this is what talks to the iPhone) ...")
-    shutdown_all = _Shutdown()
-    shutdown_all.worker = worker
-    shutdown_all.httpd = httpd
-    try:
-        t_host, t_port = __tunneld_addr()
-        shutdown_all.tunneld_server, shutdown_all.tunneld_thread = \
-            start_tunneld(t_host, t_port)
-    except Exception as e:
-        # Don't abort: without a tunnel the UI still loads and can explain
-        # itself, which beats a window that never appears.
-        _tunneld_failed(f"隧道启动失败：{type(e).__name__}: {e}")
-
-    # Belt and braces. The window's close handler calls shutdown_all directly;
-    # atexit covers the paths that don't go through it (a fatal error below, or
-    # anything that unwinds main). It is idempotent, so a double call is free.
-    import atexit
-    atexit.register(shutdown_all)
-
-    # atexit does NOT run when a signal kills us, and on macOS closing the
-    # Terminal window (SIGHUP) is a normal way to quit — without this the phone
-    # would be left on the fake location. See install_signal_handlers().
-    install_signal_handlers(shutdown_all)
-
-    # 5) MAIN THREAD -> the UI. This blocks until the window closes.
-    run_ui_blocking(url, shutdown_all, log)
-
+    return run_ios_userspace(log)
 
 # =============================================================================
 # Android path (adb) — no elevation, no tunnel.
@@ -1245,19 +1075,10 @@ def detect_android() -> bool:
 
 
 def run_ios_userspace(log) -> None:
-    """
-    Run AnyLoc against an iPhone with NO elevation, using the in-process
-    userspace tunnel (pymobiledevice3 10+).
+    """Host selectable USB/Wi-Fi sessions without automatic tunnel monitors.
 
-    Shaped like run_android(): no elevation prompt and no separate `tunneld`
-    server, because the tunnel lives inside our own process. Everything from the
-    web server down is identical to the elevated path — only how we reach the
-    phone differs.
-
-    If the device turns out to need the kernel tunnel (iOS 17.0-17.3), the
-    backend raises and the UI shows the error; the user can relaunch elevated to
-    get the old path. We deliberately do NOT auto-elevate here: silently
-    demanding a password after starting without one is worse than saying why.
+    The transport falls back to a kernel tunnel for iOS 17.0-17.3 USB when
+    already elevated, or explains that this older path requires elevation.
     """
     if not acquire_single_instance():
         if focus_existing_window():
@@ -1266,13 +1087,12 @@ def run_ios_userspace(log) -> None:
         return
 
     log.info("=" * 62)
-    log.info("  AnyLoc  —  iOS 模式（免 root / no elevation）")
+    log.info("  AnyLoc  —  iOS USB / Wi-Fi")
     log.info("  关闭窗口就会停止模拟并恢复真实定位。")
     log.info("=" * 62)
 
     worker = _ios_worker(userspace=True)
     worker.start()
-    worker.connect()
     try:
         httpd = start_web_server(worker)
     except OSError as e:
@@ -1287,11 +1107,13 @@ def run_ios_userspace(log) -> None:
 
     # Same device-setup guidance as the elevated path (plug in / Trust /
     # Developer Mode); none of it needs privileges.
-    DevModeWatcher(worker).start()
+    watcher = DevModeWatcher(worker)
+    watcher.start()
 
     shutdown_all = _Shutdown()
     shutdown_all.worker = worker
     shutdown_all.httpd = httpd
+    shutdown_all.watchers.append(watcher)
     # (no tunneld process — the tunnel is inside the worker's own session)
     import atexit
     atexit.register(shutdown_all)
@@ -1455,6 +1277,7 @@ class DevModeWatcher:
         self.worker = worker
         self.log = logging.getLogger("any-loc.devmode")
         self._loop = None
+        self._task = None
         self._thread = threading.Thread(target=self._run, daemon=True, name="devmode-watch")
         self._stop = False           # set True to end the watch loop
         self._revealed = False       # have we already revealed the option?
@@ -1462,6 +1285,8 @@ class DevModeWatcher:
 
     def _set(self, state, msg):
         # state: waiting | trust | revealing | reveal_done | enabled | error
+        if getattr(getattr(self.worker, "backend", None), "connection", {}).get("transport") == "wifi" and state != "idle":
+            return
         try:
             self.worker.devmode = {"state": state, "msg": msg}
         except Exception:
@@ -1471,14 +1296,24 @@ class DevModeWatcher:
     def start(self):
         self._thread.start()
 
+    def stop(self):
+        self._stop = True
+        if self._loop is not None and self._task is not None and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._task.cancel)
+
     def _run(self):
         import asyncio
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
-            self._loop.run_until_complete(self._watch())
+            self._task = self._loop.create_task(self._watch())
+            self._loop.run_until_complete(self._task)
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             self._set("error", f"检查开发者模式出错: {e}")
+        finally:
+            self._loop.close()
 
     async def _watch(self):
         import asyncio
@@ -1486,64 +1321,58 @@ class DevModeWatcher:
         from pymobiledevice3.services.amfi import AmfiService
         from pymobiledevice3.usbmux import list_devices
 
-        announced_trust = False
-        # Poll forever so the status reflects REALITY in real time: unplug the
-        # phone -> back to "waiting"; enable dev mode -> "enabled". Never latch.
+        last_id = None
         while not self._stop:
+            selection = dict(getattr(getattr(self.worker, "backend", None), "connection", {}))
+            if selection.get("transport", "usb") != "usb":
+                self._set("idle", "")
+                await asyncio.sleep(2)
+                continue
             try:
-                devs = await list_devices()
+                devs = [d for d in await asyncio.wait_for(list_devices(), 5)
+                        if d.connection_type == "USB"]
             except Exception:
                 devs = []
-
-            if not devs:
-                self._set("waiting", "等待设备… 请用数据线插上 iPhone 并解锁")
-                announced_trust = False
+            selected_id = selection.get("device_id")
+            if selected_id:
+                devs = [d for d in devs if d.serial == selected_id]
+            if len(devs) != 1:
                 self._revealed = False
+                self._set("idle" if devs else "waiting",
+                          "请选择要连接的 iPhone。" if devs else "请用数据线连接 iPhone 并解锁。")
                 await asyncio.sleep(2)
                 continue
-
-            # A device is present — try to open a paired lockdown session.
-            try:
-                lockdown = await create_using_usbmux(autopair=True, pair_timeout=8)
-            except Exception:
-                if not announced_trust:
-                    self._set("trust", "请在 iPhone 上点「信任这台电脑」并输入密码")
-                    announced_trust = True
-                await asyncio.sleep(2)
-                continue
-
-            # Paired. Check developer-mode status.
-            try:
-                already = await lockdown.get_developer_mode_status()
-            except Exception:
-                already = False
-
-            if already:
-                self._set("enabled", "开发者模式已开启 ✓ 可以连接了")
+            serial = devs[0].serial
+            if serial != last_id:
                 self._revealed = False
-                await asyncio.sleep(3)   # keep re-checking; do NOT latch/stop
-                continue
-
-            # OFF -> reveal the Settings row once per connection.
-            if not self._revealed:
-                self._set("revealing", "正在让「开发者模式」选项出现在设置里…")
-                try:
-                    amfi = AmfiService(lockdown)
-                    await amfi.reveal_developer_mode_option_in_ui()
-                    self._revealed = True
-                except Exception as e:
-                    self._set("error", f"无法自动显示开发者模式选项：{e}")
-                    await asyncio.sleep(3)
+                last_id = serial
+            lockdown = None
+            try:
+                lockdown = await asyncio.wait_for(
+                    create_using_usbmux(serial=serial, connection_type="USB",
+                                        autopair=True, pair_timeout=8), 12)
+                # A mode/device change during the handshake must not update the new UI.
+                if selection != dict(getattr(getattr(self.worker, "backend", None), "connection", {})):
                     continue
-
-            # Revealed — now it's the user's move. Clear, non-scary guidance.
-            self._set("reveal_done",
-                      "已让「开发者模式」出现在设置里。请在 iPhone 上手动打开："
-                      "设置 > 隐私与安全性 > 开发者模式 > 打开开关"
-                      "（手机会重启，重启后在锁屏点「打开」确认）。开启后这里会自动继续。")
-
-            # Keep polling: once the user enables + reboots, the check above flips
-            # to "enabled". Also detects unplug -> "waiting".
+                if await asyncio.wait_for(lockdown.get_developer_mode_status(), 5):
+                    self._set("enabled", "开发者模式已开启 ✓ 可以连接了")
+                    self._revealed = False
+                else:
+                    if not self._revealed:
+                        self._set("revealing", "正在显示「开发者模式」设置…")
+                        async with AmfiService(lockdown) as amfi:
+                            await asyncio.wait_for(amfi.reveal_developer_mode_option_in_ui(), 5)
+                        self._revealed = True
+                    self._set("reveal_done", "请在 iPhone 的设置 > 隐私与安全性中打开开发者模式。")
+            except Exception as e:
+                self.log.debug("Developer-mode check: %s", e)
+                self._set("trust", "请解锁 iPhone，信任这台电脑后重试。")
+            finally:
+                if lockdown is not None:
+                    try:
+                        await asyncio.wait_for(lockdown.close(), 3)
+                    except Exception:
+                        pass
             await asyncio.sleep(3)
 
 
@@ -1559,25 +1388,14 @@ def _ios_worker(userspace: bool = False):
 
 
 def userspace_tunnel_supported() -> bool:
-    """
-    True if this pymobiledevice3 can build the tunnel with NO root.
-
-    pymobiledevice3 10.x added a pure-Python (PyTCP) userspace network stack as
-    an alternative to the kernel `utun` device. That kernel device was the ONLY
-    reason AnyLoc ever needed Administrator/root, so when this is available we
-    can skip elevation entirely — no UAC prompt, no sudo password.
-
-    Older pymobiledevice3 (9.x, which the Windows build was verified against)
-    has no such module, so this returns False there and everything falls back to
-    the original elevated-tunneld path unchanged.
-    """
+    """Check the APIs required for explicit USB and Wi-Fi selection."""
     try:
-        import importlib.util
-        return importlib.util.find_spec(
-            "pymobiledevice3.remote.userspace_tunnel") is not None
-    except Exception:
+        import inspect
+        from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+        parameters = inspect.signature(UserspaceRsdTunnel).parameters
+        return "provider_factory" in parameters and "remotepairing" in parameters
+    except (ImportError, ValueError):
         return False
-
 
 if __name__ == "__main__":
     main()

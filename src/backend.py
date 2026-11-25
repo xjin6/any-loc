@@ -28,6 +28,7 @@ import os
 import sys
 import threading
 import webbrowser
+from urllib.parse import parse_qs, urlsplit
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -71,6 +72,12 @@ class DeviceWorker:
         self._stop = asyncio.Event()
         self._want_clear = False
         self._session_task = None
+        self._control_lock = asyncio.Lock()
+        self._requests = set()
+        self._pending_lock = threading.Lock()
+        self._pending_connections = 0
+        self._closing = False
+        self._clear_error = None
 
         # Signals that the session has fully finished tearing down. A
         # threading.Event (not asyncio) because shutdown() is called from
@@ -100,23 +107,125 @@ class DeviceWorker:
             self.loop.close()
 
     # ---- called from HTTP threads ------------------------------------------
-    def connect(self):
-        """Kick off (or reuse) a device session. Non-blocking."""
-        def _schedule():
-            if self.state in ("connecting", "connected") and self._session_task \
-                    and not self._session_task.done():
-                return
-            self.state = "connecting"
-            self.error = None
-            self._stop.clear()
-            # A session is about to exist, so shutdown() must wait for it.
-            # Cleared HERE (on the loop thread, before the task is created)
-            # rather than inside _session(), so there is no window in which
-            # shutdown() could see a stale "already done" and return True for a
-            # session that is still starting up.
+    def connect(self, connection=None, reconnect=False):
+        """Serialize transport changes after the old device has been cleared."""
+        if connection is not None:
+            validate = getattr(self.backend, "validate_connection", None)
+            if validate is None:
+                raise ValueError("This device does not support iOS connection modes.")
+            connection = validate(connection)
+        if self._closing:
+            raise RuntimeError("The application is shutting down.")
+        with self._pending_lock:
+            self._pending_connections += 1
             self._done.clear()
-            self._session_task = self.loop.create_task(self._session())
+
+        def _schedule():
+            if self._closing:
+                with self._pending_lock:
+                    self._pending_connections -= 1
+                self._mark_done_if_idle()
+                return
+            task = self.loop.create_task(self._connect_serial(connection, reconnect))
+            self._requests.add(task)
+            task.add_done_callback(self._connection_finished)
         self.loop.call_soon_threadsafe(_schedule)
+
+    def _mark_done_if_idle(self):
+        with self._pending_lock:
+            if not self._pending_connections and not self._requests and (self._session_task is None or self._session_task.done()):
+                self._done.set()
+
+    def _connection_finished(self, task):
+        with self._pending_lock:
+            self._pending_connections -= 1
+        self._requests.discard(task)
+        self._mark_done_if_idle()
+
+    async def _stop_current(self):
+        task = self._session_task
+        if task is None or task.done():
+            return
+        self._clear_error = None
+        self._want_clear = True
+        self._stop.set()
+        self._dirty.set()
+        if self.state == "connecting":
+            task.cancel()  # no location channel yet; cancel discovery/handshake
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=12)
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+        except asyncio.TimeoutError:
+            raise RuntimeError("旧连接尚未关闭，请稍后重试；未切换设备。") from None
+        if self._clear_error:
+            raise RuntimeError("无法确认旧设备已恢复真实定位；请重新连接旧设备并恢复定位后再切换。")
+
+    async def _connect_serial(self, connection, reconnect):
+        try:
+            async with self._control_lock:
+                if self._closing:
+                    return
+                active = self._session_task is not None and not self._session_task.done()
+                current = getattr(self.backend, "connection", None)
+                changed = connection is not None and connection != current
+                if changed and self._clear_error:
+                    raise RuntimeError("旧设备尚未确认恢复真实定位。请先重连旧设备并恢复定位，再切换连接。")
+                if active and not (changed or reconnect):
+                    return
+                if active:
+                    await self._stop_current()
+                if self._closing:
+                    return
+                if changed or reconnect or self._clear_error:
+                    # A newly selected device must never receive the previous target.
+                    self.target = self.applied = None
+                    self._want_clear = bool(self._clear_error)
+                    self._dirty.clear()
+                if connection is not None:
+                    self.backend.configure_connection(connection)
+                    self.devmode = {"state": "idle", "msg": ""}
+                self.state, self.error = "connecting", None
+                self._stop.clear()
+                self._done.clear()
+                self._session_task = self.loop.create_task(self._session())
+                self._session_task.add_done_callback(lambda _: self._mark_done_if_idle())
+        except Exception as e:
+            self.state, self.error = "error", str(e)
+            log.exception("Connection change failed")
+
+    def ios_operation(self, operation, *args):
+        """Run discovery/setup on the device loop, never concurrently with a switch."""
+        if getattr(self.backend, "platform", None) != "ios":
+            raise ValueError("iOS connection settings are unavailable in Android mode.")
+        if self._closing:
+            raise RuntimeError("The application is shutting down.")
+
+        async def run():
+            task = asyncio.current_task()
+            self._requests.add(task)
+            try:
+                async with self._control_lock:
+                    if self._closing:
+                        raise RuntimeError("The application is shutting down.")
+                    if operation == "enable_wifi":
+                        await self._stop_current()
+                        self.target = self.applied = None
+                        self._want_clear = False
+                        self.state, self.error = "idle", None
+                    return await getattr(self.backend, operation)(*args)
+            finally:
+                self._requests.discard(task)
+                self._mark_done_if_idle()
+
+        self._done.clear()
+        future = asyncio.run_coroutine_threadsafe(run(), self.loop)
+        try:
+            return future.result(timeout=45)
+        except TimeoutError:
+            future.cancel()
+            raise RuntimeError("操作超时。请解锁 iPhone、检查连接后重试。") from None
 
     def set_location(self, lat: float, lon: float):
         """Store desired coordinate; applied by the mover on the open channel."""
@@ -148,6 +257,7 @@ class DeviceWorker:
             "applied": self.applied,
             "devmode": self.devmode,
             "platform": getattr(self.backend, "platform", "unknown"),
+            "connection_pending": bool(self._pending_connections),
             **self.backend.status_extra(),
         }
 
@@ -178,6 +288,7 @@ class DeviceWorker:
         not be able to keep the window open).
         """
         # Nothing running (or never started): there is nothing to release.
+        self._closing = True
         if self._done.is_set() or not self._thread.is_alive():
             return True
 
@@ -186,6 +297,10 @@ class DeviceWorker:
                 self._want_clear = True
             self._stop.set()
             self._dirty.set()
+            if self.state == "connecting" and self._session_task:
+                self._session_task.cancel()
+            for task in list(self._requests):
+                task.cancel()
 
         try:
             self.loop.call_soon_threadsafe(_apply)
@@ -234,8 +349,10 @@ class DeviceWorker:
                         try:
                             await sess.clear()
                             self.applied = None
+                            self._clear_error = None
                             log.info("Cleared on shutdown (real GPS restored).")
-                        except Exception:
+                        except Exception as e:
+                            self._clear_error = str(e)
                             log.exception("clear on shutdown failed")
         except Exception as e:
             self.state = "error"
@@ -249,7 +366,9 @@ class DeviceWorker:
             # Release shutdown()'s waiter LAST: once this is set, the caller is
             # entitled to assume the device has been released and may start
             # tearing down the tunnel the session was talking through.
-            self._done.set()
+            # The task's done callback also accounts for queued connection changes.
+            if self._session_task is not asyncio.current_task():
+                self._mark_done_if_idle()
 
     async def _run_session(self, sess):
         """The mover loop. Runs inside _session()'s open channel."""
@@ -266,8 +385,10 @@ class DeviceWorker:
             try:
                 await sess.clear()
                 self.applied = None
+                self._clear_error = None
                 log.info("Pending clear applied on connect (real GPS restored).")
-            except Exception:
+            except Exception as e:
+                self._clear_error = str(e)
                 log.exception("pending clear failed")
 
         # Apply an initial target immediately if one is already queued.
@@ -299,8 +420,10 @@ class DeviceWorker:
                 try:
                     await sess.clear()
                     self.applied = None
+                    self._clear_error = None
                     log.info("Location simulation cleared (real GPS restored).")
                 except Exception as e:
+                    self._clear_error = str(e)
                     self.state = "error"
                     self.error = f"clear failed: {e}"
                     log.exception("clear failed")
@@ -493,6 +616,16 @@ class Handler(BaseHTTPRequestHandler):
     # ---- routes ----
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        if path == "/api/ios/devices":
+            transport = parse_qs(urlsplit(self.path).query).get("transport", ["usb"])[0]
+            try:
+                devices = self.worker.ios_operation("discover", transport)
+                return self._send_json({"ok": True, "devices": devices})
+            except ValueError as e:
+                return self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                log.exception("iOS discovery failed")
+                return self._send_json({"ok": False, "error": str(e)}, 503)
         if path == "/" or path == "/index.html":
             return self._send_file("index.html")
         if path == "/api/status":
@@ -523,8 +656,36 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/connect":
-            self.worker.connect()
+            data = self._read_json()
+            try:
+                if not isinstance(data, dict):
+                    raise ValueError("Expected a JSON object.")
+                reconnect = data.get("reconnect", False)
+                if not isinstance(reconnect, bool):
+                    raise ValueError("reconnect must be a boolean.")
+                connection = None
+                if "transport" in data or "device_id" in data:
+                    connection = {"transport": data.get("transport", "usb"),
+                                  "device_id": data.get("device_id")}
+                self.worker.connect(connection, reconnect=reconnect)
+            except (ValueError, RuntimeError) as e:
+                return self._send_json({"ok": False, "error": str(e)}, 400)
             return self._send_json({"ok": True, **self.worker.status()})
+        if path == "/api/ios/wifi/enable":
+            data = self._read_json()
+            try:
+                if not isinstance(data, dict):
+                    raise ValueError("Expected a JSON object.")
+                device_id = data.get("device_id")
+                if device_id is not None and (not isinstance(device_id, str) or len(device_id) > 256):
+                    raise ValueError("Invalid device_id.")
+                result = self.worker.ios_operation("enable_wifi", device_id or None)
+                return self._send_json({**result, "ok": True})
+            except ValueError as e:
+                return self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                log.exception("Wi-Fi preparation failed")
+                return self._send_json({"ok": False, "error": str(e)}, 503)
         if path == "/api/clear":
             self.worker.clear()
             return self._send_json({"ok": True})

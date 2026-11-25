@@ -3,9 +3,8 @@ REM ============================================================
 REM  AnyLoc — 开发模式 (DEV)
 REM  改界面：改完 web/ 里的文件，浏览器自动刷新，无需打包。
 REM
-REM  两种用法：
-REM   * 普通双击        = 只开网页，快速调界面（连不了真机）
-REM   * 右键“以管理员身份运行” = 网页热重载 + 真机隧道，能实测定位
+REM  普通双击可调试界面及 iOS 17.4+ 的 USB / Wi-Fi 连接。
+REM  iOS 17.0-17.3 的 USB 连接需要右键“以管理员身份运行”。
 REM
 REM  这里【故意】保留控制台窗口。打包出来的 AnyLoc.exe 是无控制台的窗口程序
 REM  （日志在 %LOCALAPPDATA%\AnyLoc\logs\anyloc.log），但开发模式要的就是
@@ -16,16 +15,8 @@ title AnyLoc DEV
 REM this script lives in scripts/, so cd up to the project root first
 cd /d "%~dp0.."
 
-REM 检测是否管理员
-net session >nul 2>&1
-if %errorlevel%==0 (
-  echo [管理员模式] 热重载 + 真机隧道，可实测定位。
-) else (
-  echo [普通模式] 只开网页，改界面用。
-  echo.
-  echo   想连真机实测定位？请关掉这个窗口，
-  echo   改为【右键 dev.bat ^> 以管理员身份运行】。
-)
+echo 热重载已启用；在界面选择 USB 或 Wi-Fi 后连接设备。
+echo 仅 iOS 17.0-17.3 的 USB 连接需要管理员权限。
 echo.
 python src\launcher.py --dev
 pause

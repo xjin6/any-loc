@@ -8,22 +8,24 @@ This is a DIY, local-only take on tools like AnyGo / iToolab. Everything runs on
 own machine; nothing is uploaded anywhere.
 
 AnyLoc **auto-detects** what you plug in: an Android phone (over adb) takes the
-Android path — no admin needed; otherwise it drives an iPhone/iPad over Apple's
-tunnel (which needs elevation). Same web UI either way.
+Android path; otherwise it opens the iOS interface. For iOS, choose **USB** or
+**Wi-Fi**, refresh the device list, select a device, and click **Connect**.
+The new iOS transport selection is **experimental**: development on a DevBox has
+covered mocked tests and software self-tests, not a physical iPhone connection.
 
 ```
    Browser (map + joystick)  ──HTTP──►  backend.py ──┬─ iOS:     DVT LocationSimulation  ──► iPhone
-                                                      │          (pymobiledevice3 tunneld)
+                                                      │          (session-owned USB / Wi-Fi tunnel)
                                                       └─ Android: adb `cmd location`     ──► Android phone
                                                                  (bundled adb, no root)
 ```
 
 The exact same Python code runs on both OSes, and both get the same **native app
-window**. Only these differ, and all of it is handled automatically:
+window**. Platform-specific requirements and packaging:
 
 | | Windows | macOS |
 |---|---|---|
-| **Elevation** (for the tunnel) | Administrator via a **UAC** prompt | **usually none at all** — iOS 17.4+ uses an in-process tunnel that needs no root. Only iOS 17.0–17.3 asks for your password |
+| **Elevation** | The release `.exe` still requests **UAC** via its manifest. Source/test builds need no admin for the iOS 17.4+ userspace paths; iOS 17.0–17.3 USB needs admin | iOS 17.4+ uses userspace tunnels without root. iOS 17.0–17.3 USB needs a manually elevated launch; the app does not automatically prompt or relaunch |
 | **USB driver** for the iPhone | needs **iTunes / Apple Mobile Device Support** | built into macOS (**nothing to install**) |
 | **Ships as** | a single `AnyLoc.exe` | `AnyLoc.app` + `AnyLoc.pkg` |
 | **What you see** | one **app window**, no console | one **app window** — no Terminal, no browser tab |
@@ -35,10 +37,11 @@ window**. Only these differ, and all of it is handled automatically:
 
 **Both platforms**
 - **Python 3.10+** (only needed if you run from source or build; end users of the
-  packaged app don't need Python).
+  packaged app don't need Python). **Python 3.12** was used for the current DevBox checks.
 - The Python dependencies: `pip install -U -r requirements.txt`
-  (that is `pymobiledevice3` — **v10+** is what enables the no-root tunnel on
-  macOS — plus `pywebview` for the native window).
+  (`pymobiledevice3>=11.63.1,<12` for explicit USB providers and RemotePairing
+  discovery, plus `pywebview` for the native window). The new transport code does
+  not support the older 9.x/10.x dependency range.
 - Building the app on **either** OS uses the same `requirements.txt`, and
   `scripts/build-win.ps1` / `scripts/build-mac.sh` install it into the build venv
   for you. They refuse to build without `pywebview`, because PyInstaller only
@@ -55,7 +58,9 @@ window**. Only these differ, and all of it is handled automatically:
   restores the real window.
 
 ### To spoof an iPhone/iPad
-- An **iPhone/iPad** with a Lightning/USB-C cable.
+
+- An **iPhone/iPad running iOS 17+**, with a Lightning/USB-C data cable for USB
+  use and the initial Wi-Fi preparation.
 - On the device: **Developer Mode ON**
   (`Settings > Privacy & Security > Developer Mode` → toggle on → reboot).
 - **Windows:** **iTunes / Apple Mobile Device Support** installed (provides the USB
@@ -63,6 +68,13 @@ window**. Only these differ, and all of it is handled automatically:
   is the easy way.
 - **macOS:** nothing extra — macOS already talks to iPhones over USB (`usbmuxd` is
   built in).
+- **Experimental Wi-Fi:** the phone and computer must be on the same LAN, and
+  the phone must advertise a RemotePairing service compatible with the saved
+  pairing record. Keep the phone awake/unlocked during setup and connection.
+  Wi-Fi preparation can fail on devices that do not expose the required service;
+  USB remains available. See the setup steps below.
+- **Bluetooth is not supported** by this implementation. Pairing the phone in
+  Windows Bluetooth settings does not create an iOS developer location channel.
 
 ### To spoof an Android phone
 - **Android 11 or newer** (AnyLoc uses the system `cmd location` command, added in
@@ -73,9 +85,9 @@ window**. Only these differ, and all of it is handled automatically:
   Developer options > USB debugging`). On some phones (Xiaomi, Huawei) also enable
   **USB debugging (Security settings)**.
 - Plug in with a USB cable and tap **Allow USB debugging** when the phone asks.
-- **No app to install, no root, and no admin/UAC** — `adb` is bundled with AnyLoc,
+- **No app to install, no root, and no Android-specific admin requirement** — `adb` is bundled with AnyLoc,
   and it grants itself mock-location over adb. macOS talks to Android over USB with
-  nothing extra.
+  nothing extra. The Windows release executable still has its administrator manifest.
 
 **macOS — architecture note:** the packaged `AnyLoc.app` matches the Mac it was
 **built** on (Apple Silicon build won't run on Intel and vice-versa). Running from
@@ -86,20 +98,52 @@ source works on any Mac with Python.
 
 ## Usage
 
+### iOS USB / Wi-Fi selection (experimental)
+
+USB is the default. Refresh the USB device list, select your phone, and click
+**Connect**. A USB selection only uses a physical USB transport; it does not
+silently choose the same phone over the network. When several devices are
+available, choose one explicitly.
+
+To prepare Wi-Fi for the first time:
+
+1. Connect the phone by USB, unlock it, accept **Trust This Computer**, and enable
+   **Developer Mode**. Connect the phone and computer to the same LAN.
+2. Select **Wi-Fi** in AnyLoc and expand **First use: enable Wi-Fi over USB**.
+   Refresh its USB device list and select the phone to prepare.
+3. Click **Enable Wi-Fi for this device**. This enables wireless lockdown and
+   prepares a RemotePairing record over the trusted USB connection. Wait for
+   success; an error means the preparation is incomplete.
+4. Unplug the USB cable. Refresh the wireless device list, select the phone, and
+   click **Connect**. Discovery matches RemotePairing advertisements to existing
+   pairing records; it does not pair unknown devices automatically.
+5. After connecting, test a location change, **Reset GPS**, and closing the app.
+   A green connection indicator alone does not verify that the phone's location
+   changed or was restored.
+
+Wi-Fi is currently conditional RemotePairing support, not a guarantee for every
+iOS version or network. An empty list can mean an unavailable service, missing
+or stale pairing information, a sleeping phone, or blocked LAN discovery. The
+new USB/Wi-Fi paths, disconnection handling, and GPS restoration still require
+verification with a physical iPhone; the DevBox tests cannot establish those outcomes.
+
 ### Windows
 
 1. Download **`AnyLoc.exe`** and double-click it. It's a single self-contained
    file — no install, nothing to unzip.
-2. Allow the **UAC** prompt (the tunnel needs Administrator).
+2. Allow the **UAC** prompt requested by the release executable's manifest.
+   The launcher does not force an additional elevation; iOS 17.4+ sessions use
+   userspace tunnels on Windows as well.
 3. The **AnyLoc window** opens — a normal app window with the map in it. No
    console, no browser tab, nothing else to keep open.
    (First launch takes a few extra seconds — the single exe unpacks itself once.)
-4. Click **Connect**. When the dot turns green, you're live.
+4. For iOS, choose USB or Wi-Fi, refresh and select your device, then click
+   **Connect**. When the dot turns green, the location channel is connected.
 5. **Click anywhere on the map** to teleport, or use the **joystick / WASD / arrows**
    to move. Pick a speed (Walk / Run / Bike / Drive); hold **Shift** for 3×.
 6. Press **Reset GPS** to stop spoofing and restore the real location.
-   (**Closing the AnyLoc window** also restores real GPS — it waits a second or two
-   to put the phone back before it exits. So does rebooting the phone.)
+   **Closing the AnyLoc window** also requests GPS restoration and waits for
+   session cleanup. Verify this on the phone when testing the new transports.
 
 Minimizing the window is fine. Just don't close it while you want the fake
 location to stick.
@@ -141,15 +185,14 @@ fatal error it shows a message box with the exception and this path.
    Terminal, no browser tab, nothing else to keep open.
    - **No password on iOS 17.4+ or Android.** AnyLoc builds the tunnel inside its
      own process, which needs no root.
-   - **iOS 17.0–17.3 only:** those versions require the privileged kernel tunnel,
-     so macOS shows its standard password sheet. Enter your login password.
-     (You may also see a one-time *"AnyLoc wants to control Terminal"* prompt —
-     click **OK**.)
-4. Click **Connect**. When the dot turns green, you're live. From here it's
+   - **iOS 17.0–17.3 USB only:** these sessions require the privileged kernel
+     fallback. An ordinary launch reports that elevated permissions are needed;
+     it does not automatically show a password sheet or relaunch itself.
+4. For iOS, choose the transport and device, then click **Connect**. From here it's
    identical to Windows: click the map / joystick / WASD → **Reset GPS** to restore.
-5. To stop: **close the AnyLoc window** — it restores your real GPS before it
-   exits (it waits a second or two to put the phone back). Quitting with ⌘Q, or
-   rebooting the phone, works too.
+5. To stop: **close the AnyLoc window** or quit with ⌘Q. The app requests GPS
+   restoration before releasing the session; verify the result on the phone
+   when testing the new transports.
 
 Minimizing the window is fine. Just don't close it while you want the fake
 location to stick.
@@ -170,17 +213,19 @@ bottom of the side panel.
 - **iOS 17 / 18+** use the RemoteXPC "tunnel" path (what this project targets). The tunnel
   must stay running the whole time — it lives inside the app, so that means keeping the
   **AnyLoc window** open.
-- The tunnel requires a **USB cable**. Going fully wireless is possible but needs an initial
-  wired pairing plus extra setup; not included here to keep it simple and reliable.
+- **USB** needs the cable throughout the session. **Wi-Fi** needs the initial USB
+  preparation described above, then uses RemotePairing over the LAN. This path is
+  experimental and has not yet been validated with a physical phone.
 - On the very first connect, `backend.py` **auto-mounts the Developer Disk Image** for your
   iOS version. This needs internet (it fetches the DDI) and can take a minute once.
 - If **Connect** errors:
-  - **Windows:** make sure you allowed the **UAC** prompt.
-    **macOS:** no password is needed for iOS 17.4+; on iOS 17.0-17.3 make sure you
-    entered it when asked.
+  - **Windows release executable:** allow its **UAC** prompt. Source/test builds
+    on iOS 17.4+ do not need admin for the userspace tunnel. The iOS 17.0–17.3 USB
+    fallback needs a manually elevated launch on either OS.
   - Unlock the phone; re-accept **Trust**; confirm **Developer Mode** is on.
-  - Unplug/replug the cable; try a different USB port (a direct port is often more
-    reliable than a hub).
+  - For USB, replug the cable or try a direct USB port. For Wi-Fi, confirm USB
+    preparation succeeded, refresh the list while the phone is awake, and check
+    that LAN discovery is allowed. Bluetooth cannot be used as a fallback.
   - Open the **Logs** panel in the app, or read the log file — with no console
     window, that is where the real error message is:
     Windows `%LOCALAPPDATA%\AnyLoc\logs\anyloc.log`,
@@ -194,11 +239,14 @@ bottom of the side panel.
 
 ### Command-line options (optional)
 ```bash
-python src/backend.py --port 8765 --no-browser -v
+python src/backend.py --port 8765 --no-browser --no-connect -v
 ```
+- These options belong to the standalone HTTP backend. For the normal native
+  window and explicit iOS connection flow, use `python src/launcher.py`.
 - `--port` web UI port (default 8765)
 - `--no-connect` don't auto-connect on startup (click Connect yourself)
-- `--tunneld-port` if you ran tunneld on a non-default port
+- The old `--tunneld-host` / `--tunneld-port` arguments remain parseable for
+  compatibility; the new iOS sessions own their tunnels and do not use them.
 - `-v` verbose logging (shows pymobiledevice3 detail)
 
 ---
@@ -208,12 +256,13 @@ python src/backend.py --port 8765 --no-browser -v
 ```
 any-loc/
 ├── src/               all Python source
-│   ├── launcher.py       all-in-one entry point (elevates only if needed, starts server + tunnel + window)
+│   ├── launcher.py       starts the server + idle iOS worker + native window
 │   ├── gui.py            the native app window (WebView2 on Windows, WebKit on macOS) + browser fallback
 │   ├── applog.py         file/ring logging + the null-stream shim the windowed build needs
 │   ├── backend.py        device worker + static server + JSON API (stdlib only)
 │   ├── backend_base.py   LocationBackend abstraction (shared by iOS + Android)
 │   ├── ios_backend.py    iOS backend (pymobiledevice3 tunnel + DVT)
+│   ├── ios_transport.py  explicit USB / experimental Wi-Fi discovery, pairing preparation and session tunnels
 │   └── android_backend.py Android backend (bundled adb + `cmd location`)
 ├── AnyLoc.spec        PyInstaller build spec (Windows .exe / macOS .app)
 ├── VERSION            the one place the version number lives (spec + build-mac.sh read it)
@@ -222,7 +271,7 @@ any-loc/
 │   └── vendor/           Leaflet, vendored so the map works with no internet
 ├── vendor/            bundled adb (vendor/win/adb.exe, vendor/mac/adb)
 ├── scripts/           launch & build helpers
-│   ├── dev.bat / dev.command    dev mode (UI hot-reload, optional real tunnel)
+│   ├── dev.bat / dev.command    dev mode (browser hot-reload, explicit device connection)
 │   ├── AnyLoc.command           run-from-source launcher (macOS, no packaging)
 │   ├── build-win.ps1            build AnyLoc.exe (creates the venv, checks the PE header)
 │   ├── build-mac.sh             build AnyLoc.app + AnyLoc.pkg
@@ -280,8 +329,7 @@ pyinstaller --clean --noconfirm --distpath platforms\windows\dist --workpath pla
   gives it a console window. The consequence is that `sys.stdout`/`stderr` are `None`
   at runtime and `print()` goes nowhere: everything diagnostic must go through
   `applog`, which writes `%LOCALAPPDATA%\AnyLoc\logs\anyloc.log`. macOS keeps
-  `console=True` so the `sudo` fallback (iOS 17.0-17.3) still has a TTY to prompt on;
-  the common no-root path does not need it.
+  `console=True`; the current launcher does not automatically invoke `sudo`.
 - **`runtime_tmpdir`** — the onefile exe unpacks to
   `%LOCALAPPDATA%\AnyLoc\runtime-<version>\` instead of `%TEMP%`. Machines with WDAC /
   Application Control commonly forbid loading DLLs out of `%TEMP%`, which kills a
@@ -315,10 +363,41 @@ The `.app` icon comes from `web/icon.icns`; regenerate it (and the Windows `.ico
 `python scripts/make_icon.py`, which uses Apple's `iconutil`.
 
 ### Dev mode (fast UI iteration, no packaging)
-Edit anything under `web/` and the browser auto-refreshes in ~1s.
-- **Windows:** double-click `scripts/dev.bat` (UI only), or right-click → **Run as administrator**
-  (adds the real tunnel so you can test on a device).
-- **macOS:** `./scripts/dev.command` (UI only), or `sudo ./scripts/dev.command` (adds the real tunnel).
+
+Run `python src/launcher.py --dev` after installing the requirements. It opens a
+browser at `http://127.0.0.1:8766`; changes under `web/` refresh in about one second.
+The iOS worker starts idle and uses the same explicit USB/Wi-Fi connection flow
+as the native app. It creates a session's tunnel only when you click **Connect**.
+iOS 17.4+ does not require elevation for these userspace paths. Only the older
+iOS 17.0–17.3 USB fallback needs admin/root; no automatic tunneld monitor is started.
+
+### 实体 Windows 机器验证步骤（待执行）
+
+当前 DevBox 只验证了 mock 测试和软件 self-test，没有连接实体 iPhone。
+以下步骤用于之后在有手机的 Windows 机器上验证，不能视为已通过的测试：
+
+1. 安装 Python 3.12 和 iTunes / Apple Mobile Device Support。在仓库目录运行：
+
+   ```powershell
+   git pull
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -U pip
+   .\.venv\Scripts\python.exe -m pip install -U -r requirements.txt
+   .\.venv\Scripts\python.exe src\launcher.py
+   ```
+
+   如需测试打包版本，先退出源码应用，再运行 `.\scripts\build-win.ps1`，
+   然后打开 `platforms\windows\dist\AnyLoc.exe`；正式 EXE 仍会弹 UAC。
+2. 手机通过 USB 连接，解锁、信任电脑并开启开发者模式。先选择有线 USB，
+   刷新并选择手机，点击连接；检查位置修改和“恢复真实定位”。
+3. 切换 Wi-Fi，展开“首次使用：通过 USB 启用 Wi-Fi”，刷新 USB 设备列表，
+   选中手机并点击“启用此设备的 Wi-Fi 连接”，等待成功。
+4. 确认手机与电脑在同一局域网，**拔掉数据线**，保持手机解锁；刷新无线设备，
+   选择手机后点击连接。核实此时确实没有 USB 连接。
+5. 在手机上检查位置修改、恢复定位，以及断网、重新连接、关闭 AnyLoc 后的行为。
+   保留日志和 iOS 版本；Wi-Fi 准备或发现失败时记录错误并继续使用 USB。
+
+蓝牙不在本次实现范围内；没有可执行的蓝牙定位连接流程。
 
 ### App icon
 The icon is generated from code — no binary editing. Regenerate `web/icon.ico`
@@ -332,33 +411,39 @@ The `.icns` step runs only on macOS (it shells out to Apple's `iconutil`).
 
 ## How it works (for the curious)
 
-`backend.py`:
-- Talks to `pymobiledevice3 remote tunneld` on `127.0.0.1:49151` via `get_tunneld_devices()`
-  to obtain a connected `RemoteServiceDiscoveryService` for the phone.
-- `auto_mount(rsd)` mounts the Developer Disk Image if needed.
-- Opens `DvtProvider(rsd)` → `LocationSimulation(dvt)` as a long-lived async context manager
-  on a dedicated event-loop thread, and calls `loc.set(lat, lon)` / `loc.clear()`.
-- Serves the static UI and a small JSON API (`/api/connect`, `/api/set`, `/api/clear`,
-  `/api/status`) using only the Python standard library — no web framework.
+`backend.py` serves the static UI and JSON API, including device discovery,
+explicit connection selection and USB Wi-Fi preparation. Its worker runs device
+operations on a dedicated asyncio thread.
+
+`ios_transport.py` owns each selected session's tunnel and RSD connection:
+
+- USB on iOS 17.4+ uses `CoreDeviceTunnelProxy` through a lockdown client restricted
+  to the `USB` connection type. Wi-Fi uses an authenticated RemotePairing service;
+  it never silently switches to USB. Both feed an in-process `UserspaceRsdTunnel`.
+- iOS 17.0–17.3 USB falls back to an explicit kernel tunnel for the selected USB
+  device, only when the process is already elevated. No automatic tunnel monitors
+  or background `tunneld` are started.
+- Each context closes its RSD, services and tunnel before another session opens.
+  An HTTP/2 PING checks the active RSD connection, including for Wi-Fi devices
+  that are absent from usbmux.
+
+`ios_backend.py` mounts the Developer Disk Image with `auto_mount(rsd)`, then
+holds `DvtProvider(rsd)` and `LocationSimulation(dvt)` open for `loc.set(lat, lon)`
+and `loc.clear()`.
 
 `launcher.py` is the all-in-one entry point (what becomes `AnyLoc.exe` / `AnyLoc.app`).
 It starts the web server + device worker on background threads and gives the **main
-thread to the app window** — pywebview refuses to start anywhere else, so everything
-that used to block main is now a daemon thread. Closing the window fires a `closing`
-handler that tears down in order (restore real GPS → stop the web server → stop the
-tunnel) and only then lets the process exit. POSIX signal handlers (`SIGHUP`/`SIGTERM`/
+thread to the app window** — pywebview refuses to start anywhere else. The iOS
+worker waits for the user's connection selection. Closing the window fires a
+`closing` handler that asks the session to restore GPS, closes its tunnel, and
+stops the web server before the process exits. POSIX signal handlers (`SIGHUP`/`SIGTERM`/
 `SIGINT`) run that same teardown, because `atexit` does **not** run when a process is
 killed by a signal — without them, quitting could leave the phone on the fake location.
 
-**Elevation is now the exception, not the rule.** The tunnel only ever needed
-Administrator/root because it built a *kernel* `utun` interface. pymobiledevice3 10 can
-build the same tunnel on a pure-Python userspace network stack instead, so on macOS
-AnyLoc runs the tunnel **inside its own unprivileged process** (`run_ios_userspace()`)
-and never asks for a password — which also keeps the GUI out of root, where it would
-otherwise write its profile and logs into root's home. Windows keeps the original
-elevated path (UAC is one click). iOS 17.0–17.3 has no CoreDeviceProxy service and still
-needs the kernel tunnel; there macOS shows its **native password sheet**, falling back to
-Terminal + `sudo` only if that fails.
+The iOS 17.4+ userspace paths do not require admin/root on either OS. The Windows
+release executable still requests elevation through its `requireAdministrator`
+manifest. Source/test launches do not forcibly elevate; the old USB kernel
+fallback reports a clear permissions error when admin/root is unavailable.
 
 `gui.py` owns the window, and the check differs per OS because the failure modes do.
 On **Windows** it probes the registry for the **Edge WebView2 Runtime**, because a
@@ -378,8 +463,9 @@ in-app **Logs** panel to read via `/api/logs`. Both path helpers resolve the *re
 user's home even when running under `sudo`, so an elevated run and an ordinary one write
 to the same file instead of stranding it in root's home.
 
-All pymobiledevice3 calls were verified against **v9.3x**; the no-root userspace tunnel
-additionally requires **v10+** and is skipped automatically on older versions.
+The current transport integration targets **pymobiledevice3 11.63.1**. DevBox
+validation covers mocked transport behavior and software self-tests only;
+physical USB/Wi-Fi location changes and GPS restoration remain to be tested.
 
 ---
 
