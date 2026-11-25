@@ -15,8 +15,8 @@
 #    %LOCALAPPDATA%\AnyLoc\logs\anyloc.log
 #  里；出问题先看那个文件。
 #
-#  依赖：Python 3.10+。脚本会自建/复用 platforms\windows\.venv 并在里面装好
-#  requirements.txt + pyinstaller + pywebview，不污染系统 Python。
+#  依赖：Python 3.10+。脚本在 %TEMP% 中创建一次性 venv 和工作目录，
+#  结束时自动清理，不把构建依赖或中间文件写进 OneDrive 仓库。
 # =============================================================================
 [CmdletBinding()]
 param(
@@ -27,7 +27,7 @@ param(
     # 打成文件夹而不是单文件。单文件是默认，也是发给用户的形式。
     [switch]$OneDir,
 
-    # 跳过 pip 安装（依赖没变时快一点）。
+    # 保留参数兼容性；一次性环境中不能跳过依赖安装。
     [switch]$SkipDeps
 )
 
@@ -39,9 +39,10 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 $WinDir  = "platforms\windows"
-$VenvDir = "$WinDir\.venv"
 $DistDir = "$WinDir\dist"
-$WorkDir = "$WinDir\build"
+$TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("anyloc-win-build-" + [guid]::NewGuid().ToString("N"))
+$VenvDir = Join-Path $TempRoot "venv"
+$WorkDir = Join-Path $TempRoot "work"
 $VenvPy  = "$VenvDir\Scripts\python.exe"
 
 if ($Variant -eq "test") { $AppName = "AnyLocTest" } else { $AppName = "AnyLoc" }
@@ -63,19 +64,21 @@ function Find-BootstrapPython {
     return $null
 }
 
-# ---- 1) create / reuse the build venv ---------------------------------------
+# Everything after this point is wrapped so failures and `exit` also remove the
+# temporary environment. Only the final exe remains under platforms\windows\dist.
+try {
+    New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+
+# ---- 1) create the disposable build venv -----------------------------------
 if (-not (Test-Path $VenvPy)) {
     $boot = Find-BootstrapPython
     if (-not $boot) {
         Write-Host "!! 找不到 Python 3。请先装 Python 3.10+ 并勾上 'Add to PATH'。" -ForegroundColor Red
         exit 1
     }
-    Write-Host "==> [1/4] 新建构建虚拟环境 $VenvDir （用 $boot）..."
-    New-Item -ItemType Directory -Force -Path $WinDir | Out-Null
+    Write-Host "==> [1/4] 在临时目录新建一次性构建环境 $VenvDir （用 $boot）..."
     if ($boot -eq "py") { & $boot -3 -m venv $VenvDir } else { & $boot -m venv $VenvDir }
     if ($LASTEXITCODE -ne 0) { Write-Host "!! 创建虚拟环境失败。" -ForegroundColor Red; exit 1 }
-} else {
-    Write-Host "==> [1/4] 复用已有虚拟环境 $VenvDir"
 }
 Write-Host "    Python: $VenvPy  ($(& $VenvPy --version 2>&1))"
 
@@ -83,8 +86,8 @@ Write-Host "    Python: $VenvPy  ($(& $VenvPy --version 2>&1))"
 # pywebview 必须装在 *这个* venv 里：PyInstaller 只打包它看得见的东西，
 # 而窗口版没有它就只剩浏览器兜底。
 if ($SkipDeps) {
-    Write-Host "==> [2/4] 跳过依赖安装（-SkipDeps）"
-} else {
+    Write-Host "    -SkipDeps 已忽略：一次性构建环境必须安装依赖。" -ForegroundColor Yellow
+}
     Write-Host "==> [2/4] 安装依赖（requirements + pyinstaller + pywebview）..."
     & $VenvPy -m pip install -U pip 2>&1 | Out-Null
     & $VenvPy -m pip install -U -r requirements.txt pyinstaller pywebview
@@ -97,7 +100,6 @@ if ($SkipDeps) {
             -r requirements.txt pyinstaller pywebview
         if ($LASTEXITCODE -ne 0) { Write-Host "!! pip 安装失败。" -ForegroundColor Red; exit 1 }
     }
-}
 
 # 打包前确认 pywebview 真的在 venv 里，而不是碰巧在系统 Python 里。
 # 装错地方的话 PyInstaller 不会报错，只会打出一个永远走浏览器兜底的 exe。
@@ -189,3 +191,17 @@ Write-Host ""
 Write-Host "  没有控制台了，日志在："
 Write-Host "    $env:LOCALAPPDATA\AnyLoc\logs\anyloc.log"
 Write-Host "============================================================"
+} finally {
+    if (Test-Path -LiteralPath $TempRoot) {
+        # The generated GUID directory must be an immediate child of %TEMP%.
+        $resolvedTemp = [System.IO.Path]::GetFullPath($TempRoot)
+        $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+        if ($resolvedTemp.StartsWith($tempBase, [System.StringComparison]::OrdinalIgnoreCase) -and
+            (Split-Path -Leaf $resolvedTemp) -like "anyloc-win-build-*") {
+            Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "==> 已清理临时构建环境。" -ForegroundColor DarkGray
+        } else {
+            Write-Warning "拒绝清理意外路径：$resolvedTemp"
+        }
+    }
+}

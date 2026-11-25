@@ -2,16 +2,15 @@
 # =============================================================================
 #  build-mac.sh — 在 macOS 上把 AnyLoc 打包成 .app 和 .pkg
 # =============================================================================
-#  产物（都输出到 platforms/mac/dist/）：
-#    platforms/mac/dist/AnyLoc.app          —— 拖进「应用程序」双击运行
+#  产物（输出到 platforms/mac/dist/）：
 #    platforms/mac/dist/AnyLoc-1.1.0.pkg    —— 安装包，双击装进 /Applications
 #
 #  用法：
 #    ./build-mac.sh              # 正式版（带 root 提权流程）
 #    ./build-mac.sh test         # 测试版（AnyLocTest.app，可 --selftest 验证）
 #
-#  依赖：Python 3.10+，并已安装 pymobiledevice3 与 pyinstaller。
-#  脚本会优先使用 platforms/mac/.venv 虚拟环境（再回退到 .venv-mac / .venv）。
+#  依赖：Python 3.10+。脚本在系统临时目录中创建一次性 venv，
+#  安装打包依赖，并在成功或失败后自动清理，不写入 OneDrive 仓库。
 # =============================================================================
 set -euo pipefail
 # this script lives in scripts/, so cd up to the project root first
@@ -27,10 +26,15 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-# All Mac build artifacts live under platforms/mac/ (venv, work files, dist).
+# Only the final installer lives in the repo. Venv, work files and the temporary
+# .app all live outside OneDrive and are removed on exit.
 MAC_DIR="platforms/mac"
 DIST_DIR="$MAC_DIR/dist"
-WORK_DIR="$MAC_DIR/build"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/anyloc-mac-build.XXXXXX")"
+VENV_DIR="$TEMP_ROOT/venv"
+WORK_DIR="$TEMP_ROOT/work"
+TEMP_DIST="$TEMP_ROOT/dist"
+trap 'rm -rf "$TEMP_ROOT"' EXIT INT TERM
 
 if [ "$VARIANT" = "test" ]; then
   APP_NAME="AnyLocTest"
@@ -40,31 +44,18 @@ else
   BUNDLE_ID="com.anyloc.app"
 fi
 
-# ---- pick a Python interpreter ---------------------------------------------
-if [ -x "$MAC_DIR/.venv/bin/python" ]; then
-  PY="$MAC_DIR/.venv/bin/python"
-elif [ -x ".venv-mac/bin/python" ]; then
-  PY=".venv-mac/bin/python"
-elif [ -x ".venv/bin/python" ]; then
-  PY=".venv/bin/python"
-else
-  PY="$(command -v python3)"
-fi
-echo "==> 使用 Python: $PY  ($("$PY" --version 2>&1))"
-
-if ! "$PY" -c "import PyInstaller" 2>/dev/null; then
-  echo "!! 没装 PyInstaller。请先： $PY -m pip install -U pyinstaller pymobiledevice3"
+# ---- create an isolated, disposable build environment ----------------------
+BOOT_PY="$(command -v python3 || true)"
+if [ -z "$BOOT_PY" ]; then
+  echo "!! 找不到 Python 3.10+。"
   exit 1
 fi
-
-# pywebview must be in THIS venv or PyInstaller cannot see it, and the app would
-# silently fall back to a browser window instead of the native one — a build that
-# looks fine and is quietly the wrong product. Same guard as build-win.ps1.
-if ! "$PY" -c "import webview" 2>/dev/null; then
-  echo "!! 没装 pywebview —— 打包出来的 App 会退化成浏览器窗口，而不是原生窗口。"
-  echo "   请先： $PY -m pip install -U pywebview"
-  exit 1
-fi
+echo "==> 在临时目录创建一次性构建环境：$TEMP_ROOT"
+"$BOOT_PY" -m venv "$VENV_DIR"
+PY="$VENV_DIR/bin/python"
+"$PY" -m pip install -U pip >/dev/null
+"$PY" -m pip install -U -r requirements.txt pyinstaller pywebview
+"$PY" -c "import PyInstaller, webview"
 
 # The .app icon is generated, not committed as a binary blob. Warn (don't fail)
 # so a missing Pillow doesn't block a build.
@@ -74,12 +65,12 @@ if [ ! -f "web/icon.icns" ]; then
 fi
 
 # ---- 1) build the .app with PyInstaller ------------------------------------
-echo "==> [1/3] PyInstaller 打包 ($VARIANT) → $DIST_DIR ..."
+echo "==> [1/3] PyInstaller 打包 ($VARIANT) → 临时目录 ..."
 ANYLOC_VARIANT="$VARIANT" "$PY" -m PyInstaller --clean --noconfirm \
-  --distpath "$DIST_DIR" --workpath "$WORK_DIR" \
+  --distpath "$TEMP_DIST" --workpath "$WORK_DIR" \
   AnyLoc.spec
 
-APP_PATH="$DIST_DIR/${APP_NAME}.app"
+APP_PATH="$TEMP_DIST/${APP_NAME}.app"
 if [ ! -d "$APP_PATH" ]; then
   echo "!! 打包失败：找不到 $APP_PATH"
   exit 1
@@ -113,13 +104,11 @@ fi
 
 # ---- 2) build a component .pkg that installs into /Applications ------------
 echo "==> [2/3] 生成安装包 .pkg ..."
-PKG_ROOT="$(mktemp -d)"
-COMPONENT_DIR="$(mktemp -d)"
+PKG_ROOT="$TEMP_ROOT/pkg-root"
+COMPONENT_DIR="$TEMP_ROOT/pkg-component"
+mkdir -p "$PKG_ROOT" "$COMPONENT_DIR" "$DIST_DIR"
 COMPONENT_PKG="$COMPONENT_DIR/component.pkg"
 COMPONENT_PLIST="$COMPONENT_DIR/component.plist"
-
-# Clean up temp trees no matter how we exit (success or failure).
-trap 'rm -rf "$PKG_ROOT" "$COMPONENT_DIR"' EXIT
 
 mkdir -p "$PKG_ROOT/Applications"
 cp -R "$APP_PATH" "$PKG_ROOT/Applications/"
@@ -151,8 +140,8 @@ productbuild \
 echo
 echo "============================================================"
 echo "  ✓ 完成！"
-echo "    App:  $APP_PATH"
 echo "    Pkg:  $OUT_PKG"
+echo "    临时 venv / work / App 已自动清理，仓库只保留 Pkg。"
 echo
 echo "  把 $OUT_PKG 发给用户，双击安装 → 应用进 /Applications。"
 echo "  首次打开若被拦截：右键 AnyLoc.app → 打开 → 打开。"
