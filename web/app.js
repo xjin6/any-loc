@@ -441,7 +441,7 @@ let speedMps = 4;
 let mode = "free";           // "free" | "route"
 let curState = "idle";       // last known backend state (for button logic)
 let currentPlatform = null;
-let iosTransport = "usb", iosInitialized = false, iosInitialScan = false;
+let iosTransport = "usb", activeIosTransport = "", iosInitialized = false, iosInitialScan = false;
 const iosDevices = { usb: null, wifi: null };
 const iosSelection = { usb: "", wifi: "" };
 let wifiSetupSelection = "";
@@ -520,6 +520,12 @@ function setConnectionNotice(message, kind = "error", isKey = false) {
   const el = $("connectionNotice");
   el.textContent = message ? (isKey ? t(message) : message) : "";
   el.className = "dm-banner inline" + (message ? " show " + kind : "");
+  updateDeviceStatusVisibility();
+}
+function updateDeviceStatusVisibility() {
+  const info = $("deviceInfo"), notice = $("connectionNotice"), banner = $("dmBanner");
+  const infoVisible = info.style.display !== "none" && Boolean(info.textContent.trim());
+  $("deviceStatus").classList.toggle("hidden", !(infoVisible || notice.classList.contains("show") || banner.classList.contains("show")));
 }
 async function connectionApi(url, options = {}, timeout = 60000) {
   const controller = new AbortController();
@@ -539,10 +545,17 @@ function fillDeviceSelect(id, devices, selected) {
   select.replaceChildren();
   const placeholder = devices === null ? "ios.scanFirst" : devices.length ? "ios.chooseDevice" : "ios.noDevices";
   select.add(new Option(t(placeholder), ""));
+  const nameCounts = new Map();
+  (devices || []).forEach((device) => {
+    const name = (device.name || "").trim();
+    if (name) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+  });
   (devices || []).forEach((device) => {
     const version = device.os_version ? " · iOS " + device.os_version : "";
     const shortId = device.id.length > 14 ? device.id.slice(0, 12) + "…" : device.id;
-    const label = device.name ? device.name + version + " · " + shortId : device.id + version;
+    const name = (device.name || "").trim();
+    const disambiguator = name && nameCounts.get(name) > 1 ? " · " + shortId : "";
+    const label = name ? name + version + disambiguator : shortId + version;
     select.add(new Option(label, device.id));
   });
   if ((devices || []).some((device) => device.id === selected)) select.value = selected;
@@ -551,7 +564,15 @@ function fillDeviceSelect(id, devices, selected) {
 }
 function renderIosConnection() {
   $("iosTransport").value = iosTransport;
-  $("wifiConnectionHelp").classList.toggle("hidden", iosTransport !== "wifi");
+  ["usb", "wifi"].forEach((transport) => {
+    const option = $(transport === "usb" ? "transportUsb" : "transportWifi");
+    const selected = transport === iosTransport;
+    option.classList.toggle("on", selected);
+    option.setAttribute("aria-pressed", String(selected));
+  });
+  const showWifiSetup = iosTransport === "wifi" && !(iosDevices.wifi || []).length;
+  $("wifiConnectionHelp").classList.toggle("hidden", !showWifiSetup);
+  if (!showWifiSetup) $("wifiSetup").open = false;
   $("iosDeviceLabel").textContent = t(iosTransport === "wifi" ? "ios.wifiDevice" : "ios.device");
   const previous = iosSelection[iosTransport];
   iosSelection[iosTransport] = fillDeviceSelect("iosDevice", iosDevices[iosTransport], previous);
@@ -567,7 +588,7 @@ function updateConnectionControls() {
   const isIos = currentPlatform === "ios";
   const busy = Boolean(connectionBusy || awaitingConnection || clearBusy || curState === "connecting");
   $("iosConnectionControls").classList.toggle("hidden", !isIos);
-  ["iosTransport", "iosDevice", "wifiSetupDevice", "btnRefreshDevices", "btnRefreshUsbDevices"].forEach((id) => { $(id).disabled = busy; });
+  ["iosTransport", "transportUsb", "transportWifi", "iosDevice", "wifiSetupDevice", "btnRefreshDevices", "btnRefreshUsbDevices"].forEach((id) => { $(id).disabled = busy; });
   $("btnEnableWifi").disabled = busy || !wifiSetupSelection;
   $("btnEnableWifi").textContent = t(connectionBusy === "enable" ? "ios.enablingWifi" : "ios.enableWifi");
   $("btnRefreshDevices").textContent = t(connectionBusy === "scan" ? "ios.scanning" : "ios.refresh");
@@ -585,12 +606,17 @@ async function refreshIosDevices(forSetup = false) {
   updateConnectionControls();
   try {
     const data = await connectionApi("/api/ios/devices?transport=" + transport);
-    iosDevices[transport] = (Array.isArray(data.devices) ? data.devices : []).filter((device) => device && typeof device.id === "string" && device.id);
+    const discovered = (Array.isArray(data.devices) ? data.devices : []).filter((device) => device && typeof device.id === "string" && device.id);
+    const activeDevice = curState === "connected" && activeIosTransport === transport
+      ? (iosDevices[transport] || []).find((device) => device.id === iosSelection[transport])
+      : null;
+    // A live RemotePairing session may stop advertising while it is in use.
+    // Keep the connected device visible instead of turning a healthy session
+    // into "No devices found" and reopening the first-use setup card.
+    iosDevices[transport] = discovered.length || !activeDevice ? discovered : [activeDevice];
     renderIosConnection();
-    if (!iosDevices[transport].length) {
-      setConnectionNotice(transport === "wifi" ? "ios.noWifiHint" : "ios.noUsbHint", "waiting", true);
-      if (transport === "wifi") $("wifiSetup").open = true;
-    }
+    // The empty selector already says that no device was found. Keep the
+    // surrounding panel quiet; setup guidance is available on demand.
   } catch (error) { setConnectionNotice(error.message || t("ios.requestFailed")); }
   finally { connectionBusy = ""; updateConnectionControls(); }
 }
@@ -598,17 +624,29 @@ $("iosTransport").addEventListener("change", () => {
   // A selection is only applied by Connect. Keep movement paused meanwhile,
   // so a changed selector cannot accidentally move the previously-connected phone.
   iosTransport = $("iosTransport").value === "wifi" ? "wifi" : "usb";
+  if (iosTransport === "wifi") {
+    $("dmBanner").className = "dm-banner";
+    updateDeviceStatusVisibility();
+  }
   connectionGate = true;
   suspendMovement();
   renderIosConnection();
-  if (iosTransport === "wifi" && !(iosDevices.wifi || []).length) $("wifiSetup").open = true;
   refreshIosDevices();
+});
+["transportUsb", "transportWifi"].forEach((id) => {
+  $(id).addEventListener("click", () => {
+    if ($(id).disabled) return;
+    const transport = $(id).dataset.transport;
+    if (transport === iosTransport) return;
+    $("iosTransport").value = transport;
+    $("iosTransport").dispatchEvent(new Event("change"));
+  });
 });
 $("iosDevice").addEventListener("change", () => {
   iosSelection[iosTransport] = $("iosDevice").value;
   connectionGate = true;
   suspendMovement();
-  setConnectionNotice("ios.ready", "waiting", true);
+  setConnectionNotice(null);
   updateConnectionControls();
 });
 $("wifiSetupDevice").addEventListener("change", () => {
@@ -1357,6 +1395,11 @@ function applyStatus(s) {
   curState = s.connection_pending ? "connecting" : s.state || "idle";
   if (s.connection_pending) s = { ...s, state: curState };
   currentPlatform = s.platform || currentPlatform;
+  if (currentPlatform === "ios") {
+    const reportedTransport = s.transport || (s.connection || {}).transport;
+    if (s.state === "connected" && ["usb", "wifi"].includes(reportedTransport)) activeIosTransport = reportedTransport;
+    else if (["idle", "error"].includes(s.state)) activeIosTransport = "";
+  }
   if (awaitingConnection && curState !== "connecting") {
     const configured = s.connection || {};
     const matches = currentPlatform !== "ios" ||
@@ -1366,7 +1409,7 @@ function applyStatus(s) {
       awaitingConnection = null;
       if (curState === "connected") {
         connectionGate = false;
-        setConnectionNotice("ios.connectedHint", "enabled", true);
+        setConnectionNotice(null);
       } else if (curState === "idle") {
         setConnectionNotice("ios.connectionEnded", "waiting", true);
       } else setConnectionNotice(null);  // The concrete backend error is shown below.
@@ -1394,6 +1437,7 @@ function applyStatus(s) {
 
   const d = s.device || {};
   const dm = s.devmode || {};
+  $("deviceInfo").className = "status-line";
   // The device line: only show concrete device info when actually connected.
   // Otherwise defer to the (real-time) developer-mode banner below — we never
   // dump raw internal errors like "set failed: Channel is closed" to the user.
@@ -1402,13 +1446,19 @@ function applyStatus(s) {
     // on platform so iPhone shows "iOS", Android shows "Android".
     const osLabel = d.platform === "android" ? "Android" : "iOS";
     const heading = document.createElement("b");
+    heading.className = "device-summary-name";
     heading.textContent = d.name || d.model;
+    const meta = document.createElement("span");
+    meta.className = "device-summary-meta";
     const identity = document.createElement("span");
-    identity.className = "coord";
+    identity.className = "device-summary-id coord";
     identity.textContent = (d.id || "").slice(0, 12) + "…";
     const transport = s.transport || (s.connection || {}).transport;
     const connectionLabel = d.platform === "ios" && ["usb", "wifi"].includes(transport) ? " · " + t("ios." + transport) : "";
-    $("deviceInfo").replaceChildren(heading, document.createTextNode(` · ${osLabel} ${d.os_version || "?"}${connectionLabel}`), document.createElement("br"), identity);
+    const modelLabel = d.name && d.model && d.name !== d.model ? d.model + " · " : "";
+    meta.textContent = `${modelLabel}${osLabel} ${d.os_version || "?"}${connectionLabel}`;
+    $("deviceInfo").className = "device-summary";
+    $("deviceInfo").replaceChildren(heading, meta, identity);
     $("deviceInfo").style.display = "";
   } else if (s.state === "connecting") {
     $("deviceInfo").textContent = t("device.connecting");
@@ -1416,8 +1466,11 @@ function applyStatus(s) {
   } else if (s.error || (dm.state && dm.state !== "idle" && !(currentPlatform === "ios" && iosTransport === "wifi"))) {
     // a live devmode banner will speak for us — hide the redundant line
     $("deviceInfo").style.display = "none";
+  } else if (currentPlatform === "ios") {
+    $("deviceInfo").textContent = "";
+    $("deviceInfo").style.display = "none";
   } else {
-    $("deviceInfo").textContent = t(currentPlatform === "ios" ? "ios.ready" : "device.notConnected2");
+    $("deviceInfo").textContent = t("device.notConnected2");
     $("deviceInfo").style.display = "";
   }
 
@@ -1441,6 +1494,7 @@ function applyStatus(s) {
   } else {
     banner.className = "dm-banner";
   }
+  updateDeviceStatusVisibility();
 }
 
 // ============================================================================

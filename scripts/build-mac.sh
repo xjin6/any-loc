@@ -3,7 +3,7 @@
 #  build-mac.sh — 在 macOS 上把 AnyLoc 打包成 .app 和 .pkg
 # =============================================================================
 #  产物（输出到 platforms/mac/dist/）：
-#    platforms/mac/dist/AnyLoc-1.1.0.pkg    —— 安装包，双击装进 /Applications
+#    platforms/mac/dist/AnyLoc-<version>.pkg —— 安装包，双击装进 /Applications
 #
 #  用法：
 #    ./build-mac.sh              # 正式版（带 root 提权流程）

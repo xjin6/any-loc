@@ -348,7 +348,7 @@ startup, easier to inspect).
 python3 -m venv platforms/mac/.venv
 platforms/mac/.venv/bin/pip install -U -r requirements.txt pyinstaller pywebview
 
-./scripts/build-mac.sh          # shippable: platforms/mac/dist/AnyLoc.app + AnyLoc-1.1.0.pkg
+./scripts/build-mac.sh          # shippable: platforms/mac/dist/AnyLoc-<version>.pkg
 ./scripts/build-mac.sh test     # test: platforms/mac/dist/AnyLocTest.app
 
 # validate the test app without root:

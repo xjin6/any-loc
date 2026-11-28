@@ -92,6 +92,7 @@
   input,button,select{font:inherit}
   input[type=text],select{width:100%;background:var(--inset2);border:1px solid var(--border);color:var(--text);
     border-radius:10px;padding:11px 12px;font-size:13.5px;outline:none;transition:.12s}
+  select{-webkit-appearance:none;appearance:none;background-image:none}
   input[type=text]::placeholder{color:var(--faint)}
   input[type=text]:focus,select:focus{border-color:var(--blue);background:var(--panel);
     box-shadow:0 0 0 3px var(--blueSoft)}
@@ -109,20 +110,63 @@
   button.danger:hover{background:var(--redSoft);border-color:var(--red)}
 
   .status-line{font-size:12.5px;color:var(--muted);line-height:1.5}
-  /* reserve ~2 lines so the Connect buttons don't jump when the device line
-     wraps to 2 lines in en/ja (or shows device info vs a notice) */
-  #deviceInfo{min-height:3em}
-  .connection-controls{margin-bottom:12px}
-  .connection-field{margin-top:10px}
-  .connection-row{display:flex;gap:8px;align-items:center}
-  .connection-row select{min-width:0;flex:1}
-  .connection-row button{flex:none;padding:10px}
-  .connection-hint{font-size:11.5px;color:var(--muted);line-height:1.55;margin:7px 0 0}
-  .wifi-setup{margin-top:10px;border:1px solid var(--border);border-radius:10px;padding:10px}
-  .wifi-setup summary{font-size:12px;color:var(--blueText);cursor:pointer;font-weight:500}
-  .wifi-setup p{margin:9px 0}
-  .wifi-setup .enable-wifi{width:100%;margin-top:8px}
+  .visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;
+    margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+
+  /* Device connection flow: mode -> optional setup -> device -> status/actions. */
+  .connection-controls{display:flex;flex-direction:column;gap:14px;margin-bottom:12px}
+  .connection-step{display:flex;flex-direction:column;gap:8px}
+  .connection-step-head{display:flex;align-items:center}
+  .connection-step-head label.step-title{margin:0}
+  .step-title{font-size:12px;color:var(--text2);font-weight:600;line-height:1.3}
+
+  /* The transport is a two-choice mode switch, not a native dropdown. */
+  .transport-switch{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;
+    background:var(--inset);border:1px solid var(--border);border-radius:12px}
+  .transport-option{display:flex;align-items:center;justify-content:center;gap:7px;min-width:0;padding:9px 8px;
+    border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted);box-shadow:none;
+    font-size:12.5px;font-weight:600}
+  .transport-option:hover{background:var(--inset2);color:var(--text2);border-color:transparent}
+  .transport-option.on{background:var(--panel);border-color:var(--border2);color:var(--blueText);box-shadow:var(--shadowSm)}
+  .transport-option svg{width:16px;height:16px;flex:none}
+
+  .connection-row{display:flex;gap:8px;align-items:stretch}
+  .select-shell{position:relative;min-width:0;flex:1}
+  .select-shell::after{content:"";position:absolute;right:13px;top:50%;width:7px;height:7px;
+    border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);
+    transform:translateY(-65%) rotate(45deg);pointer-events:none}
+  .select-shell select{height:100%;min-width:0;padding:10px 34px 10px 12px;background:var(--panel);
+    border-color:var(--border2);border-radius:10px;box-shadow:none;white-space:nowrap;text-overflow:ellipsis}
+  .select-shell select:disabled{background:var(--inset2)}
+  .connection-row button{flex:none;padding:9px 12px;box-shadow:none}
+  .refresh-btn{min-width:78px}
+  .refresh-btn::before{content:"\21bb";display:inline-block;margin-right:5px;font-size:15px;line-height:0;vertical-align:-1px}
+  .connection-hint{font-size:11.5px;color:var(--muted);line-height:1.55;margin:0}
+
+  /* Wi-Fi preparation is supporting information, visually nested under Wi-Fi. */
+  .wifi-setup{border:1px solid var(--border);border-radius:12px;background:var(--inset2);overflow:hidden}
+  .wifi-setup summary{list-style:none;display:flex;align-items:center;gap:9px;padding:10px 11px;
+    color:var(--text2);cursor:pointer;font-size:12px;font-weight:600}
+  .wifi-setup summary::-webkit-details-marker{display:none}
+  .wifi-setup summary::after{content:"";width:7px;height:7px;margin-left:auto;border-right:1.5px solid var(--muted);
+    border-bottom:1.5px solid var(--muted);transform:rotate(45deg);transition:transform .15s}
+  .wifi-setup[open] summary::after{transform:rotate(225deg) translate(-2px,-2px)}
+  .setup-icon{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;
+    background:var(--blueSoft);color:var(--blueText);flex:none}
+  .wifi-setup-body{border-top:1px solid var(--border);padding:11px;display:flex;flex-direction:column;gap:10px}
+  .wifi-setup-body label{margin-bottom:-4px}
+  .wifi-setup .enable-wifi{width:100%;margin:0;box-shadow:none}
+
+  .device-status{border:1px solid var(--border);border-radius:12px;background:var(--inset2);padding:11px}
+  #deviceInfo{min-height:0}
+  .device-summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 6px;line-height:1.45}
+  .device-summary-name{width:100%;font-size:13.5px;color:var(--text);font-weight:600}
+  .device-summary-meta{font-size:12px;color:var(--muted)}
+  .device-summary-id{font-size:11.5px;color:var(--faint)}
+  .device-status .dm-banner.show{min-height:0;margin-top:8px;padding:9px 10px}
   #connectionNotice{overflow-wrap:anywhere}
+  .device-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .device-actions button{min-width:0}
   .status-line b{color:var(--text);font-weight:600}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
   .pill.idle{background:var(--inset);color:var(--muted)}
@@ -393,40 +437,66 @@
 
     <!-- Device -->
     <div class="card">
-      <h2 data-i18n="device.title">设备</h2>
+      <h2><span data-i18n="device.title">设备</span><span class="pill idle" id="statePill">idle</span></h2>
       <div id="iosConnectionControls" class="connection-controls hidden">
-        <label for="iosTransport" data-i18n="ios.transport">连接方式</label>
-        <select id="iosTransport" aria-describedby="bluetoothHint">
-          <option value="usb" data-i18n="ios.usb">USB（有线）</option>
-          <option value="wifi" data-i18n="ios.wifi">Wi-Fi（无线）</option>
-          <option value="bluetooth" disabled data-i18n="ios.bluetooth">蓝牙（暂不支持）</option>
-        </select>
-        <p id="bluetoothHint" class="connection-hint" data-i18n="ios.bluetoothHint">iOS 定位模拟暂不支持通过蓝牙连接。</p>
+        <div class="connection-step">
+          <div class="connection-step-head">
+            <span class="step-title" id="iosTransportLabel" data-i18n="ios.transport">连接方式</span>
+          </div>
+          <div class="transport-switch" role="group" aria-labelledby="iosTransportLabel">
+            <button type="button" class="transport-option" id="transportUsb" data-transport="usb" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v5M16 3v5M7 8h10v3a5 5 0 0 1-5 5v5M9 3h6"/></svg>
+              <span data-i18n="ios.usb">USB（有线）</span>
+            </button>
+            <button type="button" class="transport-option" id="transportWifi" data-transport="wifi" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 9a12 12 0 0 1 16 0M7 12.5a7.5 7.5 0 0 1 10 0M10 16a3 3 0 0 1 4 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/></svg>
+              <span data-i18n="ios.wifi">Wi-Fi（无线）</span>
+            </button>
+          </div>
+          <select id="iosTransport" class="visually-hidden" tabindex="-1" aria-hidden="true">
+            <option value="usb" data-i18n="ios.usb">USB（有线）</option>
+            <option value="wifi" data-i18n="ios.wifi">Wi-Fi（无线）</option>
+          </select>
+        </div>
         <div id="wifiConnectionHelp" class="hidden">
           <details class="wifi-setup" id="wifiSetup">
-            <summary data-i18n="ios.wifiSetup">首次使用：通过 USB 启用 Wi-Fi</summary>
-            <p class="connection-hint" data-i18n="ios.wifiSetupHint">先用数据线连接并解锁 iPhone，点「信任」。开启开发者模式，并让电脑和手机连接同一 Wi-Fi。</p>
-            <label for="wifiSetupDevice" data-i18n="ios.setupDevice">准备启用的 USB 设备</label>
-            <div class="connection-row">
-              <select id="wifiSetupDevice"><option value="" data-i18n="ios.scanFirst">请先刷新设备列表</option></select>
-              <button id="btnRefreshUsbDevices" data-i18n="ios.refresh">刷新</button>
+            <summary>
+              <span class="setup-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              </span>
+              <span data-i18n="ios.wifiSetup">首次使用：通过 USB 启用 Wi-Fi</span>
+            </summary>
+            <div class="wifi-setup-body">
+              <p class="connection-hint" data-i18n="ios.wifiSetupHint">先用数据线连接并解锁 iPhone，点「信任」。开启开发者模式，并让电脑和手机连接同一 Wi-Fi。</p>
+              <label for="wifiSetupDevice" data-i18n="ios.setupDevice">准备启用的 USB 设备</label>
+              <div class="connection-row">
+                <div class="select-shell">
+                  <select id="wifiSetupDevice"><option value="" data-i18n="ios.scanFirst">请先刷新设备列表</option></select>
+                </div>
+                <button id="btnRefreshUsbDevices" class="refresh-btn" data-i18n="ios.refresh">刷新</button>
+              </div>
+              <button id="btnEnableWifi" class="blue enable-wifi" disabled data-i18n="ios.enableWifi">启用此设备的 Wi-Fi 连接</button>
             </div>
-            <button id="btnEnableWifi" class="blue enable-wifi" disabled data-i18n="ios.enableWifi">启用此设备的 Wi-Fi 连接</button>
           </details>
-          <p class="connection-hint" data-i18n="ios.wifiConnectHint">启用成功后拔掉数据线，再刷新下方无线设备列表，选择设备并点「连接」。</p>
         </div>
-        <div class="connection-field">
-          <label for="iosDevice" id="iosDeviceLabel" data-i18n="ios.device">选择设备</label>
+        <div class="connection-step">
+          <div class="connection-step-head">
+            <label for="iosDevice" class="step-title" id="iosDeviceLabel" data-i18n="ios.device">选择设备</label>
+          </div>
           <div class="connection-row">
-            <select id="iosDevice"><option value="" data-i18n="ios.scanFirst">请先刷新设备列表</option></select>
-            <button id="btnRefreshDevices" data-i18n="ios.refresh">刷新</button>
+            <div class="select-shell">
+              <select id="iosDevice"><option value="" data-i18n="ios.scanFirst">请先刷新设备列表</option></select>
+            </div>
+            <button id="btnRefreshDevices" class="refresh-btn" data-i18n="ios.refresh">刷新</button>
           </div>
         </div>
       </div>
-      <div class="status-line" id="deviceInfo" data-i18n="device.notConnected">未连接。</div>
-      <div id="connectionNotice" class="dm-banner inline" role="status" aria-live="polite"></div>
-      <div class="dm-banner" id="dmBanner"></div>
-      <div style="margin-top:9px" class="row">
+      <div class="device-status hidden" id="deviceStatus">
+        <div class="status-line" id="deviceInfo" data-i18n="device.notConnected">未连接。</div>
+        <div id="connectionNotice" class="dm-banner inline" role="status" aria-live="polite"></div>
+        <div class="dm-banner" id="dmBanner"></div>
+      </div>
+      <div class="device-actions">
         <button class="primary" id="btnConnect" data-i18n="btn.connect">连接</button>
         <button class="danger" id="btnClear" data-i18n="btn.reset" data-i18n-title="btn.reset.title" title="停止模拟，恢复真实 GPS">恢复真实定位</button>
       </div>
@@ -517,9 +587,6 @@
     <div class="card">
       <h2 data-i18n="pos.title">当前模拟位置</h2>
       <div class="coord" id="curCoord">—</div>
-      <div class="status-line" style="margin-top:6px">
-        <span data-i18n="status.label">状态：</span><span class="pill idle" id="statePill">idle</span>
-      </div>
     </div>
 
     <!-- Attribution for the tile + routing services. This lives in the panel
